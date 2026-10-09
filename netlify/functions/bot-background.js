@@ -222,9 +222,9 @@ async function enriquecerListaTJSP(lista) {
 
 // ─── Tokens dos bots ──────────────────────────────────────────────────────────
 const BOTS = [
-  '8701852568:AAHZw2eiUzHzlAlVRU0_qGNk1UBmTXAjwVo',
-  '8783865981:AAG2MP2vb0iLeIeDWewKb5JQXYKL6JxPIiM',
-];
+  process.env.TELEGRAM_BOT_TOKEN,
+  process.env.TELEGRAM_BOT_TOKEN_2,
+].filter(Boolean);
 
 const NOSSA_API   = 'https://busca-processos.onrender.com/api/v1';
 const NOSSA_CHAVE = 'busca-processos-dev-key-2024';

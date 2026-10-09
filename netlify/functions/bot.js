@@ -1,9 +1,9 @@
 const fetch = require('node-fetch');
 
 const BOTS = [
-  '8701852568:AAHZw2eiUzHzlAlVRU0_qGNk1UBmTXAjwVo',
-  
-];
+  process.env.TELEGRAM_BOT_TOKEN,
+  process.env.TELEGRAM_BOT_TOKEN_2,
+].filter(Boolean);
 
 function resolverToken(event) {
   const qs = event.queryStringParameters || {};
