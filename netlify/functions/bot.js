@@ -2,7 +2,7 @@ const fetch = require('node-fetch');
 
 const BOTS = [
   '8701852568:AAHZw2eiUzHzlAlVRU0_qGNk1UBmTXAjwVo',
-  '8783865981:AAG2MP2vb0iLeIeDWewKb5JQXYKL6JxPIiM',
+  
 ];
 
 function resolverToken(event) {
