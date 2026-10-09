@@ -1,0 +1,8 @@
+{
+  "name": "consulta-processos-api",
+  "version": "2.0.0",
+  "description": "API pública para consulta de processos judiciais por OAB, nome ou CNJ",
+  "dependencies": {
+    "node-fetch": "^2.7.0"
+  }
+}
