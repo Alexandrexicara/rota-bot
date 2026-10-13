@@ -46,12 +46,12 @@ exports.handler = async (event) => {
         });
       } else {
         // Chamar background function para fazer a busca longa
-        const bgUrl = `${event.headers['x-forwarded-proto'] || 'https'}://${event.headers.host}/.netlify/functions/bot-background`;
+        const bgUrl = `${event.headers['x-forwarded-proto'] || 'https'}://${event.headers.host}/.netlify/functions/bot-background?token=${encodeURIComponent(token)}`;
         fetch(bgUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token, chatId, estado: match[1].toUpperCase(), numero: match[2] }),
-        }).catch(() => {});
+          body: JSON.stringify({ ...body, token }),
+        }).catch((error) => console.error('Background function error:', error.message));
       }
 
     } else if (/^\/(start|help|ajuda)$/i.test(texto)) {
