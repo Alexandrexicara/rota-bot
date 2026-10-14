@@ -226,9 +226,6 @@ const BOTS = [
   process.env.TELEGRAM_BOT_TOKEN_2,
 ].filter(Boolean);
 
-const NOSSA_API   = 'https://busca-processos.onrender.com/api/v1';
-const NOSSA_CHAVE = 'busca-processos-dev-key-2024';
-
 // ─── Identifica o token correto pelo ?token= na query string ─────────────────
 function resolverToken(event) {
   const qs = event.queryStringParameters || {};
@@ -407,19 +404,6 @@ ${cards}
 </html>`;
 }
 
-// ─── Acorda o Render e espera estar pronto ────────────────────────────────────
-async function acordarRender() {
-  const BASE = 'https://busca-processos.onrender.com';
-  for (let i = 0; i < 5; i++) {
-    try {
-      const r = await fetch(`${BASE}/health`, { method: 'GET' });
-      if (r.ok) return true;
-    } catch (_) {}
-    await new Promise(r => setTimeout(r, 5000));
-  }
-  return false;
-}
-
 // ─── Busca e entrega ──────────────────────────────────────────────────────────
 async function processarOAB(token, chatId, estado, numero) {
   await enviarMensagem(token, chatId, `🔍 Buscando OAB *${estado} ${numero}*...`);
@@ -450,43 +434,38 @@ async function processarOAB(token, chatId, estado, numero) {
     }
   }
 
-  // ── Fallback: DataJud (todos os tribunais) ────────────────────────────────
-  await acordarRender();
-
+  // ── Busca de fallback executada dentro das funções Netlify ────────────────
   try {
-    const resp = await fetch(`${NOSSA_API}/buscar/oab`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': NOSSA_CHAVE },
-      body: JSON.stringify({ estado, numero }),
-    });
-
-    const dados = await resp.json();
-
-    if (!dados.sucesso) {
-      await enviarMensagem(token, chatId, `❌ Erro: ${dados.mensagem || 'Falha na consulta'}`);
-      return;
+    const buscarDatajud = require('../tribunais/datajud');
+    const encontrados = await buscarDatajud(`${estado.toUpperCase()}${numero}`);
+    const unicos = new Map();
+    for (const processo of encontrados) {
+      const numeroProcesso = processo.numero || processo.numeroProcesso;
+      if (numeroProcesso && !unicos.has(numeroProcesso)) {
+        unicos.set(numeroProcesso, { ...processo, numero: numeroProcesso });
+      }
     }
-
-    const adv       = dados.dados?.advogado;
-    const processos = dados.dados?.processos || [];
-    const total     = dados.dados?.total_processos || processos.length;
+    const processos = Array.from(unicos.values());
+    const total = processos.length;
 
     if (total === 0) {
-      await enviarMensagem(token, chatId, `📋 Nenhum processo encontrado para OAB *${estado} ${numero}*.`);
+      await enviarMensagem(token, chatId,
+        `📋 Nenhum processo encontrado para OAB *${estado} ${numero}* no DataJud/CNJ.`
+      );
       return;
     }
 
     const temTJSP = processos.some(p => (p.tribunal || '').toUpperCase().includes('TJSP'));
     let processosFinais = processos;
     if (temTJSP) {
-      await enviarMensagem(token, chatId, `✅ *Encontrados ${total} processos*\n🔍 Buscando dados completos no TJSP...`);
+      await enviarMensagem(token, chatId, `✅ *Encontrados ${total} processos no DataJud/CNJ*\n🔍 Buscando dados completos no TJSP...`);
       processosFinais = await enriquecerListaTJSP(processos);
     } else {
-      await enviarMensagem(token, chatId, `✅ *Encontrados ${total} processos*\n📁 Gerando arquivo HTML...`);
+      await enviarMensagem(token, chatId, `✅ *Encontrados ${total} processos no DataJud/CNJ*\n📁 Gerando arquivo HTML...`);
     }
 
     const nomeArq  = `OAB_${estado}${numero}_processos.html`;
-    const conteudo = gerarHTML(estado, numero, processosFinais, adv?.nome);
+    const conteudo = gerarHTML(estado, numero, processosFinais, null);
     const kb       = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
 
     await enviarArquivo(token, chatId, nomeArq, conteudo,
@@ -495,7 +474,7 @@ async function processarOAB(token, chatId, estado, numero) {
 
   } catch (e) {
     console.error('processarOAB error:', e);
-    await enviarMensagem(token, chatId, `❌ Erro ao consultar a API: ${e.message}`);
+    await enviarMensagem(token, chatId, `❌ Erro ao consultar o DataJud/CNJ: ${e.message}`);
   }
 }
 
