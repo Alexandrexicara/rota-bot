@@ -556,6 +556,34 @@ ${cards}
 </html>`;
 }
 
+async function entregarRelatorioOAB(token, chatId, uf, numero, tribunal, processos) {
+  const unicos = new Map();
+  for (const p of (processos || [])) {
+    const chave = String(p.numero || p.numeroProcesso || '').replace(/\\D/g, '');
+    if (chave) unicos.set(chave, p);
+  }
+  const finais = Array.from(unicos.values());
+  if (!finais.length) {
+    await enviarMensagem(token, chatId,
+      `📋 O portal consultado não retornou processos para OAB *${uf} ${numero}*. Isso não confirma inexistência de processos; significa apenas que a consulta direta não encontrou resultados.`);
+    return;
+  }
+
+  await enviarMensagem(token, chatId,
+    `✅ *${finais.length} processo(s) localizado(s) no ${tribunal}*\\n📁 Gerando o mesmo relatório HTML...`);
+
+  const nomeArq = `OAB_${uf}${numero}_processos.html`;
+  const conteudo = gerarHTML(uf, numero, finais, null);
+  const kb = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
+  const legenda = `📄 ${nomeArq}\\n${kb} KB — abra no navegador\\nOAB: ${uf} ${numero} | ${finais.length} processo(s)\\nFonte: raspagem direta do ${tribunal}`;
+  try {
+    await enviarArquivo(token, chatId, nomeArq, conteudo, legenda);
+  } catch (erroEnvio) {
+    await enviarMensagem(token, chatId,
+      `⚠️ ${finais.length} processo(s) foram localizados, mas o relatório HTML não foi enviado: ${erroEnvio.message}`);
+  }
+}
+
 // ─── Busca e entrega ──────────────────────────────────────────────────────────
 async function processarOAB(token, chatId, estado, numero) {
   const uf = String(estado || '').toUpperCase();
@@ -609,32 +637,7 @@ async function processarOAB(token, chatId, estado, numero) {
     return;
   }
 
-  if (!processos.length) {
-    await enviarMensagem(token, chatId,
-      `📋 O portal consultado não retornou processos para OAB *${uf} ${numero}*. Isso não confirma inexistência de processos; significa apenas que a consulta direta não encontrou resultados.`);
-    return;
-  }
-
-  const unicos = new Map();
-  for (const p of processos) {
-    const chave = String(p.numero || p.numeroProcesso || '').replace(/\\D/g, '');
-    if (chave) unicos.set(chave, p);
-  }
-  const finais = Array.from(unicos.values());
-
-  await enviarMensagem(token, chatId,
-    `✅ *${finais.length} processo(s) localizado(s) no ${tribunal}*\\n📁 Gerando o mesmo relatório HTML...`);
-
-  const nomeArq = `OAB_${uf}${numero}_processos.html`;
-  const conteudo = gerarHTML(uf, numero, finais, null);
-  const kb = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
-  const legenda = `📄 ${nomeArq}\\n${kb} KB — abra no navegador\\nOAB: ${uf} ${numero} | ${finais.length} processo(s)\\nFonte: raspagem direta do ${tribunal}`;
-  try {
-    await enviarArquivo(token, chatId, nomeArq, conteudo, legenda);
-  } catch (erroEnvio) {
-    await enviarMensagem(token, chatId,
-      `⚠️ ${finais.length} processo(s) foram localizados, mas o relatório HTML não foi enviado: ${erroEnvio.message}`);
-  }
+  await entregarRelatorioOAB(token, chatId, uf, numero, tribunal, processos);
 }
 
 
@@ -675,28 +678,7 @@ async function processarRespostaCaptchaTJMG(token, chatId, codigo, replyToMessag
       urlProcesso: p.urlProcesso || ''
     })).filter(p => p.numero);
 
-    if (!processos.length) {
-      await enviarMensagem(token, chatId,
-        '📋 O eproc de 1º grau do TJMG não retornou processos para OAB MG ' + sessao.oab +
-        '. Isso não confirma inexistência de processos em outros sistemas do tribunal, como PJe ou sistemas legados.');
-      return true;
-    }
-
-    const unicos = new Map();
-    for (const p of processos) {
-      const chave = String(p.numero).replace(/\D/g, '');
-      if (chave) unicos.set(chave, p);
-    }
-    const finais = Array.from(unicos.values());
-    const nomeArq = 'OAB_MG' + sessao.oab + '_processos.html';
-    const conteudo = gerarHTML('MG', sessao.oab, finais, null);
-    const kb = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
-
-    await enviarMensagem(token, chatId,
-      '✅ ' + finais.length + ' processo(s) localizado(s) no eproc de 1º grau do TJMG. Gerando o relatório HTML...');
-    await enviarArquivo(token, chatId, nomeArq, conteudo,
-      '📄 ' + nomeArq + '\n' + kb + ' KB — abra no navegador\nOAB: MG ' + sessao.oab +
-      ' | ' + finais.length + ' processo(s)\nFonte: consulta pública do eproc TJMG (1º grau).');
+    await entregarRelatorioOAB(token, chatId, 'MG', sessao.oab, 'TJMG', processos);
     return true;
   } catch (e) {
     console.error('[TJMG CAPTCHA]', e.message);
