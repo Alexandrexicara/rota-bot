@@ -434,7 +434,7 @@ async function processarOAB(token, chatId, estado, numero) {
   try {
     const ufsESAJ = ['AC', 'AL', 'AM', 'BA', 'CE', 'MS', 'RN', 'SP'];
     if (ufsESAJ.includes(uf)) {
-      tribunal = uf === 'SP' ? 'TJSP' : 'TJMS';
+      tribunal = ({ AC: 'TJAC', AL: 'TJAL', AM: 'TJAM', BA: 'TJBA', CE: 'TJCE', MS: 'TJMS', RN: 'TJRN', SP: 'TJSP' })[uf];
       await enviarMensagem(token, chatId, `🔍 Consultando o portal oficial do ${tribunal}...`);
       processos = await buscarOABnoESAJ(uf, numero, 30);
     } else {
