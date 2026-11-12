@@ -115,15 +115,26 @@ function parsePaginaProcesso(html, linkOrigem, tribunal = 'TJSP') {
 
 // ─── Busca por OAB nos portais e-SAJ ─────────────────────────────────────────
 async function buscarOABnoESAJ(estado, numeroOAB, maxProcessos = 30) {
+  // Tribunais que utilizam o portal e-SAJ: cada UF consulta exclusivamente
+  // o próprio domínio estadual, mantendo o mesmo fluxo de raspagem do TJSP.
   const portais = {
-    SP: { host: 'https://esaj.tjsp.jus.br', tribunal: 'TJSP' },
+    AC: { host: 'https://esaj.tjac.jus.br', tribunal: 'TJAC' },
+    AL: { host: 'https://www2.tjal.jus.br', tribunal: 'TJAL' },
+    AM: { host: 'https://consultasaj.tjam.jus.br', tribunal: 'TJAM' },
+    BA: { host: 'https://esaj.tjba.jus.br', tribunal: 'TJBA' },
+    CE: { host: 'https://esaj.tjce.jus.br', tribunal: 'TJCE' },
     MS: { host: 'https://esaj.tjms.jus.br', tribunal: 'TJMS' },
+    RN: { host: 'https://esaj.tjrn.jus.br', tribunal: 'TJRN' },
+    SP: { host: 'https://esaj.tjsp.jus.br', tribunal: 'TJSP' },
   };
-  const portal = portais[estado.toUpperCase()];
+  const uf = estado.toUpperCase();
+  const portal = portais[uf];
   if (!portal) return [];
 
+  // O e-SAJ exige o número da OAB acompanhado da UF de inscrição.
+  const oabCompleta = `${numeroOAB}${uf}`;
   const urlLista = `${portal.host}/cpopg/search.do?conversationId=` +
-    `&cbPesquisa=NUMOAB&dadosConsulta.valorConsulta=${encodeURIComponent(numeroOAB)}` +
+    `&cbPesquisa=NUMOAB&dadosConsulta.valorConsulta=${encodeURIComponent(oabCompleta)}` +
     `&dadosConsulta.valorConsultaNuUnificado=&dadosConsulta.localPesquisa.cdLocal=-1`;
 
   const htmlLista = await fetchHtmlTJSP(urlLista);
@@ -141,7 +152,7 @@ async function buscarOABnoESAJ(estado, numeroOAB, maxProcessos = 30) {
     }
   }
 
-  if (links.length === 0 && estado.toUpperCase() === 'MS') {
+  if (links.length === 0 && uf === 'MS') {
     const buscarOABnoTJMS = require('../tribunais/tjms');
     const processosTJMS = await buscarOABnoTJMS(`MS${numeroOAB}`);
     return processosTJMS.map(processo => ({
