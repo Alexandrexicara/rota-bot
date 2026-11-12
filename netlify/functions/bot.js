@@ -1,95 +1,100 @@
 const fetch = require('node-fetch');
 
-const BOTS = [
-  process.env.TELEGRAM_BOT_TOKEN,
-  process.env.TELEGRAM_BOT_TOKEN_2,
-].filter(Boolean);
-
-function resolverToken(event) {
-  const qs = event.queryStringParameters || {};
-  if (qs.token && BOTS.includes(qs.token)) return qs.token;
-  return BOTS[0];
+function getToken() {
+  return process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN_2 || '';
 }
 
-function resolverBaseUrl(event) {
+function baseUrl(event) {
   const headers = event.headers || {};
-  const proto = headers['x-forwarded-proto'] || headers['X-Forwarded-Proto'] || 'https';
-  const host = headers['x-forwarded-host'] || headers['X-Forwarded-Host'] || headers.host || headers.Host || process.env.URL || process.env.DEPLOY_URL || 'localhost';
-  const normalizedHost = host.replace(/^https?:\/\//i, '');
-  return `${proto}://${normalizedHost}`;
+  const proto = headers['x-forwarded-proto'] || 'https';
+  const host = headers['x-forwarded-host'] || headers.host || process.env.URL || '';
+  if (!host) throw new Error('Não foi possível identificar o domínio do Netlify.');
+  return `${proto}://${String(host).replace(/^https?:\/\//i, '')}`;
 }
 
-// ─── Controle de duplicatas ───────────────────────────────────────────────────
+async function telegram(token, method, payload) {
+  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    timeout: 10000
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.description || `Telegram HTTP ${response.status}`);
+  }
+  return data;
+}
+
 const processados = new Set();
 
-// ─── Handler — responde 200 OK imediatamente e chama background ───────────────
 exports.handler = async (event) => {
+  if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Method not allowed' };
+
   try {
-    const token    = resolverToken(event);
-    const body     = JSON.parse(event.body || '{}');
-    const updateId = body.update_id;
-    const mensagem = body.message || {};
-    const chatId   = mensagem.chat?.id;
-    const texto    = (mensagem.text || '').trim();
-
-    if (!chatId) return { statusCode: 200, body: 'OK' };
-
-    // Deduplicar
-    if (updateId && processados.has(updateId)) {
+    const token = getToken();
+    if (!token) {
+      console.error('TELEGRAM_BOT_TOKEN não configurado.');
       return { statusCode: 200, body: 'OK' };
     }
-    if (updateId) processados.add(updateId);
-    if (processados.size > 500) processados.clear();
 
-    if (/^\/oab\s+/i.test(texto)) {
-      const arg   = texto.replace(/^\/oab\s+/i, '').trim();
-      const match = arg.match(/^([A-Za-z]{2})\s*(\d+)$/);
+    const body = JSON.parse(event.body || '{}');
+    const mensagem = body.message || body.edited_message || {};
+    const chatId = mensagem.chat?.id;
+    const texto = String(mensagem.text || '').trim();
+    if (!chatId || !texto) return { statusCode: 200, body: 'OK' };
 
+    if (body.update_id !== undefined) {
+      if (processados.has(body.update_id)) return { statusCode: 200, body: 'OK' };
+      processados.add(body.update_id);
+      if (processados.size > 1000) processados.clear();
+    }
+
+    const comando = texto.split(/\s+/)[0].replace(/@[^@]+$/, '').toLowerCase();
+    if (comando === '/oab') {
+      const arg = texto.replace(/^\/oab(?:@[^\s]+)?\s*/i, '').trim();
+      const match = arg.match(/^([A-Za-z]{2})\s*[-/]?\s*(\d{1,10})$/);
       if (!match) {
-        // Resposta rápida — não precisa de background
-        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, text: `❌ Formato inválido.\nUse: /oab UF NUMERO\nExemplo: /oab MS 3616` }),
+        await telegram(token, 'sendMessage', {
+          chat_id: chatId,
+          text: '❌ Formato inválido. Use: /oab UF NUMERO\nExemplo: /oab MG 12345'
         });
-      } else {
-        // Chamar background function para fazer a busca longa
-        const bgUrl = new URL('/.netlify/functions/bot-background', resolverBaseUrl(event));
-        bgUrl.searchParams.set('token', token);
-
-        try {
-          await fetch(bgUrl.toString(), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...body, token }),
-          });
-        } catch (error) {
-          console.error('Background function error:', error.message);
-        }
+        return { statusCode: 200, body: 'OK' };
       }
 
-    } else if (/^\/(start|help|ajuda)$/i.test(texto)) {
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      const url = new URL('/.netlify/functions/bot-background', baseUrl(event));
+      const response = await fetch(url.toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: `👋 *Bot de Processos Judiciais*\n\n*/oab UF NUMERO* — busca processos do advogado\n\nExemplo: /oab MS 3616`,
-          parse_mode: 'Markdown',
-        }),
+        body: JSON.stringify(body),
+        timeout: 15000
       });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        console.error('Falha ao iniciar background:', response.status, detail.slice(0, 300));
+        await telegram(token, 'sendMessage', {
+          chat_id: chatId,
+          text: '⚠️ Não consegui iniciar a consulta agora. Tente novamente em instantes.'
+        });
+      }
+      return { statusCode: 200, body: 'OK' };
+    }
 
-    } else if (texto.startsWith('/')) {
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text: `❓ Comando não reconhecido. Use /ajuda.` }),
+    if (['/start', '/help', '/ajuda'].includes(comando)) {
+      await telegram(token, 'sendMessage', {
+        chat_id: chatId,
+        text: '👋 Bot de Processos Judiciais\n\n/oab UF NUMERO — busca processos por inscrição OAB.\nExemplo: /oab MG 12345'
+      });
+    } else if (comando.startsWith('/')) {
+      await telegram(token, 'sendMessage', {
+        chat_id: chatId,
+        text: '❓ Comando não reconhecido. Use /ajuda.'
       });
     }
 
     return { statusCode: 200, body: 'OK' };
-  } catch (e) {
-    console.error('Handler error:', e);
+  } catch (error) {
+    console.error('Webhook Telegram:', error.message);
     return { statusCode: 200, body: 'OK' };
   }
 };

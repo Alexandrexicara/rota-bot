@@ -170,17 +170,13 @@ async function buscarOABnoESAJ(estado, numeroOAB, maxProcessos = 30) {
   return processos;
 }
 
-// ─── Busca TJMG no índice público DataJud ────────────────────────────────────
+// ─── Busca publicações por OAB no DJEN/CNJ ───────────────────────────────────
 async function buscarOABnoTJMG(numeroOAB) {
-  const buscarDatajud = require('../tribunais/datajud');
-  const processos = await buscarDatajud(`MG${numeroOAB}`);
-  return processos
-    .filter(processo => (processo.tribunal || '').toUpperCase().includes('TJMG'))
-    .slice(0, 30)
-    .map(processo => ({ ...processo, numero: processo.numero || processo.numeroProcesso }));
+  const { buscarPublicacoesOAB } = require('../tribunais/djen');
+  const resultado = await buscarPublicacoesOAB('MG', numeroOAB, 90);
+  return resultado.processos.filter(p => String(p.tribunal || '').toUpperCase().includes('TJMG')).slice(0, 30);
 }
 
-// ─── Enriquece processos do TJSP vindos do DataJud ───────────────────────────
 async function enriquecerTJSP(processo) {
   const tribunal = (processo.tribunal || '').toUpperCase();
   if (!tribunal.includes('TJSP')) return processo;
@@ -235,15 +231,18 @@ function resolverToken(event) {
 
 // ─── Enviar mensagem de texto ─────────────────────────────────────────────────
 async function enviarMensagem(token, chatId, texto) {
-  try {
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text: texto, parse_mode: 'Markdown' }),
-    });
-  } catch (e) {
-    console.error('enviarMensagem:', e.message);
+  if (!token) throw new Error('TELEGRAM_BOT_TOKEN não configurado no Netlify.');
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text: texto, parse_mode: 'Markdown' }),
+    timeout: 15000,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.description || `Telegram sendMessage HTTP ${response.status}`);
   }
+  return data;
 }
 
 // ─── Enviar arquivo HTML (multipart manual, node-fetch v2) ───────────────────
@@ -262,14 +261,19 @@ async function enviarArquivo(token, chatId, nomeArquivo, conteudo, legenda) {
       fileBuffer,
       Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
     ]);
-    await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
       method: 'POST',
       headers: {
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
         'Content-Length': body.length,
       },
       body,
+      timeout: 30000,
     });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) {
+      throw new Error(data.description || `Telegram sendDocument HTTP ${response.status}`);
+    }
   } catch (e) {
     console.error('enviarArquivo:', e.message);
   }
@@ -337,6 +341,8 @@ function gerarHTML(estado, numero, processos, nomeAdvogado) {
     const numRaw      = p.numero || p.numeroProcesso || 'N/D';
     const num         = formatarNumeroProcesso(numRaw);
     const link        = `https://supremodoseteoriginal.com/?processo=${num}`;
+    const linkPublicacao = /^https:\/\//i.test(String(p.link || '')) ? String(p.link) : '';
+    const textoPublicacao = String(p.textoPublicacao || '').trim();
     const todasPartes = p.partes || [];
     const poloAtivo   = todasPartes.filter(x => {
       const polo = (x.polo || x.tipoPolo || x.tipo || '').toUpperCase();
@@ -354,7 +360,9 @@ function gerarHTML(estado, numero, processos, nomeAdvogado) {
 
     return `<div class="card">
   <div class="proc-num">PROCESSO: ${esc(num)}</div>
-  <div class="row">🔗 <b>LINK:</b> <a href="${link}" target="_blank">${link}</a></div>
+  <div class="row">🔗 <b>LINK:</b> <a href="${link}" target="_blank" rel="noopener noreferrer">${link}</a></div>
+  ${linkPublicacao ? `<div class="row">📰 <b>PUBLICAÇÃO DJEN:</b> <a href="${esc(linkPublicacao)}" target="_blank" rel="noopener noreferrer">Abrir publicação oficial</a></div>` : ''}
+  ${textoPublicacao ? `<div class="row"><b>📄 TRECHO DA PUBLICAÇÃO:</b> ${esc(textoPublicacao.slice(0, 1800))}</div>` : ''}
   <div class="row">⚖️ <b>TRIBUNAL:</b> ${esc(p.tribunal || 'N/D')}</div>
   <div class="row">📁 <b>CLASSE:</b> ${esc(p.classe || 'N/D')}</div>
   <div class="row">📌 <b>ASSUNTO:</b> ${esc(p.assunto || 'N/D')}</div>
@@ -408,7 +416,7 @@ ${cards}
 async function processarOAB(token, chatId, estado, numero) {
   await enviarMensagem(token, chatId, `🔍 Buscando OAB *${estado} ${numero}*...`);
 
-  const siglasDiretas = { SP: 'TJSP', MS: 'TJMS', MG: 'TJMG' };
+  const siglasDiretas = { SP: 'TJSP', MS: 'TJMS' };
   const siglaDireta = siglasDiretas[estado.toUpperCase()];
   if (siglaDireta) {
     try {
@@ -434,47 +442,38 @@ async function processarOAB(token, chatId, estado, numero) {
     }
   }
 
-  // ── Busca de fallback executada dentro das funções Netlify ────────────────
+  // ── Fallback nacional: API pública do DJEN/CNJ, que permite filtro por OAB ──
   try {
-    const buscarDatajud = require('../tribunais/datajud');
-    const encontrados = await buscarDatajud(`${estado.toUpperCase()}${numero}`);
-    const unicos = new Map();
-    for (const processo of encontrados) {
-      const numeroProcesso = processo.numero || processo.numeroProcesso;
-      if (numeroProcesso && !unicos.has(numeroProcesso)) {
-        unicos.set(numeroProcesso, { ...processo, numero: numeroProcesso });
-      }
-    }
-    const processos = Array.from(unicos.values());
+    const { buscarPublicacoesOAB } = require('../tribunais/djen');
+    const busca = await buscarPublicacoesOAB(estado, numero, 90);
+    const processos = busca.processos;
     const total = processos.length;
 
     if (total === 0) {
       await enviarMensagem(token, chatId,
-        `📋 Nenhum processo encontrado para OAB *${estado} ${numero}* no DataJud/CNJ.`
+        `📋 Nenhuma publicação localizada para OAB *${estado} ${numero}* no DJEN entre ${busca.dataInicio} e ${busca.dataFim}. Isso não significa que não existam outros processos sem publicação nesse período.\\n\\n_Fonte: DJEN/CNJ_`
       );
       return;
     }
 
-    const temTJSP = processos.some(p => (p.tribunal || '').toUpperCase().includes('TJSP'));
+    const temTJSP = processos.some(p => String(p.tribunal || '').toUpperCase().includes('TJSP'));
     let processosFinais = processos;
     if (temTJSP) {
-      await enviarMensagem(token, chatId, `✅ *Encontrados ${total} processos no DataJud/CNJ*\n🔍 Buscando dados completos no TJSP...`);
+      await enviarMensagem(token, chatId, `✅ *${total} processo(s) localizado(s) em publicações do DJEN/CNJ*\\n🔍 Complementando dados públicos do TJSP...`);
       processosFinais = await enriquecerListaTJSP(processos);
     } else {
-      await enviarMensagem(token, chatId, `✅ *Encontrados ${total} processos no DataJud/CNJ*\n📁 Gerando arquivo HTML...`);
+      await enviarMensagem(token, chatId, `✅ *${total} processo(s) localizado(s) em publicações do DJEN/CNJ*\\n📁 Gerando arquivo HTML...`);
     }
 
-    const nomeArq  = `OAB_${estado}${numero}_processos.html`;
+    const nomeArq = `OAB_${estado}${numero}_processos.html`;
     const conteudo = gerarHTML(estado, numero, processosFinais, null);
-    const kb       = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
-
+    const kb = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
     await enviarArquivo(token, chatId, nomeArq, conteudo,
-      `🌐 ${nomeArq}\n${kb} KB — abra no navegador\nOAB: ${estado}${numero} | 📊 ${total} processos`
+      `🌐 ${nomeArq}\\n${kb} KB — abra no navegador\\nOAB: ${estado}${numero} | 📊 ${total} processo(s)\\nFonte: DJEN/CNJ (últimos 90 dias)`
     );
-
   } catch (e) {
     console.error('processarOAB error:', e);
-    await enviarMensagem(token, chatId, `❌ Erro ao consultar o DataJud/CNJ: ${e.message}`);
+    await enviarMensagem(token, chatId, `❌ Não foi possível concluir a consulta à API do DJEN/CNJ: ${e.message}`);
   }
 }
 
@@ -489,6 +488,7 @@ const processados = new Set();
 exports.handler = async (event) => {
   try {
     const token    = resolverToken(event);
+    if (!token) throw new Error('TELEGRAM_BOT_TOKEN não configurado no Netlify.');
     const body     = JSON.parse(event.body || '{}');
     const updateId = body.update_id;
     const mensagem = body.message || {};
