@@ -62,7 +62,7 @@ async function buscarNoTribunal(alias, oab, apiKey) {
 
 module.exports = async function buscarDatajud(valorOAB) {
   const { numero } = normalizarOAB(valorOAB);
-  const apiKey = process.env.DATAJUD_API_KEY;
+  const apiKey = process.env.DATAJUD_API_KEY || 'cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw==';
   if (!apiKey) throw new Error('Configuração ausente: cadastre DATAJUD_API_KEY nas variáveis do Netlify.');
 
   const resultados = [];
