@@ -541,36 +541,39 @@ async function diagnosticarTJMG(token, chatId) {
     params.set('fPP:Decoration:numeroOAB', '171934');
     params.set('fPP:Decoration:j_id240', tipo);
     params.set('fPP:Decoration:estadoComboOAB', '12');
-    params.set('AJAXREQUEST', '_viewRoot');
     params.set('AJAX:EVENTS_COUNT', '1');
     params.set('fPP:j_id261', 'fPP:j_id261');
     const action = new URL(attr((form.match(/<form[^>]*>/i) || [''])[0], 'action') || pageUrl, get.url).toString();
-    const post = await httpFetch(action, {
-      method: 'POST',
-      headers: {
-        ...headers,
-        'Cookie': cookies,
-        'Referer': get.url,
-        'Origin': new URL(get.url).origin,
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Faces-Request': 'partial/ajax',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Accept': 'application/xml, text/xml, */*; q=0.01'
-      },
-      body: params.toString(),
-      timeout: 25000
-    });
-    const response = await post.text();
-    const updates = [...response.matchAll(/<update[^>]*id=["']([^"']+)["'][^>]*>([\s\S]*?)<\/update>/gi)]
-      .map(m => ({ id: m[1], content: m[2].replace(/<!\[CDATA\[|\]\]>/g, '').slice(0, 1200) }));
-    const cnjs = [...new Set(response.match(/\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}/g) || [])];
-    const count = (response.match(/([0-9.]+)\s*resultados encontrados/i) || [])[1] || '';
-    const title = (response.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '';
-    const body = (response.match(/<body[^>]*>([\s\S]*?)<\/body>/i) || [])[1] || response;
-    const bodyText = body.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/\\s+/g, ' ').trim();
-    const formNames = [...new Set([...response.matchAll(/<form[^>]*(?:id|name)=["']([^"']+)["']/gi)].map(m => m[1]))];
-    const inputNames = [...new Set([...response.matchAll(/<input\b[^>]*name=["']([^"']+)["']/gi)].map(m => m[1]))].slice(0, 30);
-    return { label, tipo, getStatus: get.status, postStatus: post.status, bytes: Buffer.byteLength(response), title, cnjs, count, formNames, inputNames, bodyText: bodyText.slice(0, 1300), updateIds: updates.map(x => x.id), updates: updates.slice(0, 3), responseStart: response.slice(0, 300) };
+    const variants = [];
+    for (const ajaxRequest of ['fPP', '_viewRoot', 'fPP:j_id261']) {
+      const p = new URLSearchParams(params);
+      p.set('AJAXREQUEST', ajaxRequest);
+      const post = await httpFetch(action, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'Cookie': cookies,
+          'Referer': get.url,
+          'Origin': new URL(get.url).origin,
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          'Faces-Request': 'partial/ajax',
+          'X-Requested-With': 'XMLHttpRequest',
+          'Accept': 'application/xml, text/xml, */*; q=0.01'
+        },
+        body: p.toString(),
+        timeout: 25000
+      });
+      const response = await post.text();
+      const updates = [...response.matchAll(/<update[^>]*id=["']([^"']+)["'][^>]*>([\s\S]*?)<\/update>/gi)]
+        .map(m => ({ id: m[1], content: m[2].replace(/<!\[CDATA\[|\]\]>/g, '').slice(0, 900) }));
+      const cnjs = [...new Set(response.match(/\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}/g) || [])];
+      const title = (response.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '';
+      const body = (response.match(/<body[^>]*>([\s\S]*?)<\/body>/i) || [])[1] || response;
+      const bodyText = body.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/\s+/g, ' ').trim();
+      const count = (response.match(/([0-9.]+)\s*resultados encontrados/i) || [])[1] || '';
+      variants.push({ ajaxRequest, status: post.status, bytes: Buffer.byteLength(response), title, cnjs, count, updateIds: updates.map(x => x.id), updates: updates.slice(0, 2), bodyText: bodyText.slice(0, 900), responseStart: response.slice(0, 220) });
+    }
+    return { label, tipo, getStatus: get.status, action, cookieNames: cookies.split(';').map(x => x.split('=')[0]), variants };
   }
   const results = [];
   for (const [host, label] of [
