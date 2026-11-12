@@ -294,6 +294,135 @@ async function enviarArquivo(token, chatId, nomeArquivo, conteudo, legenda) {
   }
 }
 
+
+let poolCaptchaTJMG = null;
+let tabelaCaptchaTJMGPronta = false;
+const captchaTJMGMemoria = new Map();
+
+function obterPoolCaptchaTJMG() {
+  const connectionString = process.env.DATADASE_URL || process.env.DATABASE_URL;
+  if (!connectionString) return null;
+  if (!poolCaptchaTJMG) {
+    const { Pool } = require('pg');
+    poolCaptchaTJMG = new Pool({
+      connectionString,
+      ssl: { rejectUnauthorized: false },
+      max: 1,
+      connectionTimeoutMillis: 5000,
+      idleTimeoutMillis: 10000
+    });
+  }
+  return poolCaptchaTJMG;
+}
+
+async function garantirTabelaCaptchaTJMG(pool) {
+  if (tabelaCaptchaTJMGPronta) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tjmg_oab_captcha_sessions (
+      chat_id BIGINT PRIMARY KEY,
+      oab TEXT NOT NULL,
+      cookie TEXT NOT NULL,
+      captcha_message_id BIGINT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL
+    )
+  `);
+  tabelaCaptchaTJMGPronta = true;
+}
+
+async function salvarCaptchaTJMG(chatId, sessao) {
+  const chave = String(chatId);
+  const dados = {
+    oab: String(sessao.oab || ''),
+    cookie: String(sessao.cookie || ''),
+    messageId: String(sessao.messageId || ''),
+    expiresAt: Date.now() + 10 * 60 * 1000
+  };
+  captchaTJMGMemoria.set(chave, dados);
+  try {
+    const pool = obterPoolCaptchaTJMG();
+    if (!pool) return;
+    await garantirTabelaCaptchaTJMG(pool);
+    await pool.query(
+      `INSERT INTO tjmg_oab_captcha_sessions (chat_id, oab, cookie, captcha_message_id, expires_at)
+       VALUES ($1, $2, $3, $4, NOW() + INTERVAL '10 minutes')
+       ON CONFLICT (chat_id) DO UPDATE SET
+         oab = EXCLUDED.oab,
+         cookie = EXCLUDED.cookie,
+         captcha_message_id = EXCLUDED.captcha_message_id,
+         expires_at = EXCLUDED.expires_at`,
+      [chave, dados.oab, dados.cookie, dados.messageId]
+    );
+  } catch (e) {
+    console.error('Persistência da sessão CAPTCHA TJMG indisponível; mantendo sessão temporária em memória:', e.message);
+  }
+}
+
+async function obterCaptchaTJMG(chatId) {
+  const chave = String(chatId);
+  try {
+    const pool = obterPoolCaptchaTJMG();
+    if (pool) {
+      await garantirTabelaCaptchaTJMG(pool);
+      const r = await pool.query(
+        'SELECT oab, cookie, captcha_message_id AS "messageId" FROM tjmg_oab_captcha_sessions WHERE chat_id = $1 AND expires_at > NOW()',
+        [chave]
+      );
+      if (r.rows[0]) return r.rows[0];
+    }
+  } catch (e) {
+    console.error('Leitura da sessão CAPTCHA TJMG indisponível:', e.message);
+  }
+  const mem = captchaTJMGMemoria.get(chave);
+  if (mem && mem.expiresAt > Date.now()) return mem;
+  captchaTJMGMemoria.delete(chave);
+  return null;
+}
+
+async function apagarCaptchaTJMG(chatId) {
+  captchaTJMGMemoria.delete(String(chatId));
+  try {
+    const pool = obterPoolCaptchaTJMG();
+    if (!pool) return;
+    await garantirTabelaCaptchaTJMG(pool);
+    await pool.query('DELETE FROM tjmg_oab_captcha_sessions WHERE chat_id = $1', [String(chatId)]);
+  } catch (e) {
+    console.error('Não foi possível limpar a sessão CAPTCHA TJMG no banco:', e.message);
+  }
+}
+
+async function enviarCaptchaFoto(token, chatId, imageBuffer, mime, oab) {
+  const boundary = '----FormBoundary' + Date.now();
+  const tipo = String(mime || 'image/png').toLowerCase();
+  const extensao = tipo.includes('jpeg') || tipo.includes('jpg') ? 'jpg' : 'png';
+  const legenda = '🔐 Confirmação do TJMG para OAB MG ' + oab +
+    '\nResponda diretamente a esta imagem digitando os caracteres que aparecem. Não é preciso enviar mais nenhum dado.';
+  const campos =
+    '--' + boundary + '\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n' + chatId + '\r\n' +
+    '--' + boundary + '\r\nContent-Disposition: form-data; name="caption"\r\n\r\n' + legenda + '\r\n';
+  const arquivo =
+    '--' + boundary + '\r\nContent-Disposition: form-data; name="photo"; filename="tjmg-captcha.' + extensao + '"\r\n' +
+    'Content-Type: ' + tipo + '\r\n\r\n';
+  const body = Buffer.concat([
+    Buffer.from(campos + arquivo, 'utf8'),
+    imageBuffer,
+    Buffer.from('\r\n--' + boundary + '--\r\n', 'utf8')
+  ]);
+  const response = await fetch('https://api.telegram.org/bot' + token + '/sendPhoto', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'multipart/form-data; boundary=' + boundary,
+      'Content-Length': body.length
+    },
+    body,
+    timeout: 20000
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false || !data.result?.message_id) {
+    throw new Error(data.description || 'Telegram não aceitou a imagem de confirmação do TJMG.');
+  }
+  return data.result.message_id;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function formatarData(data) {
   if (!data) return 'N/D';
@@ -453,6 +582,15 @@ async function processarOAB(token, chatId, estado, numero) {
       tribunal = `TJ${uf}`;
       await enviarMensagem(token, chatId, `🔍 Consultando diretamente o portal do ${tribunal}...`);
       const encontrados = await buscar(`${uf}${numero}`);
+      if (encontrados && encontrados.requiresCaptcha) {
+        const messageId = await enviarCaptchaFoto(token, chatId, encontrados.imageBuffer, encontrados.mime, numero);
+        await salvarCaptchaTJMG(chatId, {
+          oab: encontrados.oab || numero,
+          cookie: encontrados.cookie,
+          messageId
+        });
+        return;
+      }
       processos = (encontrados || []).map(p => ({
         numero: p.numero || p.numero_cnj || p.numeroProcesso,
         tribunal: p.tribunal || tribunal,
@@ -496,6 +634,73 @@ async function processarOAB(token, chatId, estado, numero) {
   } catch (erroEnvio) {
     await enviarMensagem(token, chatId,
       `⚠️ ${finais.length} processo(s) foram localizados, mas o relatório HTML não foi enviado: ${erroEnvio.message}`);
+  }
+}
+
+
+async function processarRespostaCaptchaTJMG(token, chatId, codigo, replyToMessageId) {
+  const sessao = await obterCaptchaTJMG(chatId);
+  if (!sessao || String(sessao.messageId) !== String(replyToMessageId)) return false;
+
+  const resposta = String(codigo || '').trim();
+  if (!/^[A-Za-z0-9]{3,10}$/.test(resposta)) {
+    await enviarMensagem(token, chatId, 'Digite somente os caracteres exibidos na imagem e responda diretamente à foto do TJMG.');
+    return true;
+  }
+
+  try {
+    await enviarMensagem(token, chatId, '🔎 Validando o código e consultando o eproc do TJMG...');
+    const resultado = await SCRAPERS.MG.submeterCaptcha(sessao, resposta);
+
+    if (resultado.requiresCaptcha) {
+      const messageId = await enviarCaptchaFoto(token, chatId, resultado.imageBuffer, resultado.mime, sessao.oab);
+      await salvarCaptchaTJMG(chatId, {
+        oab: resultado.oab || sessao.oab,
+        cookie: resultado.cookie,
+        messageId
+      });
+      return true;
+    }
+
+    await apagarCaptchaTJMG(chatId);
+    const processos = (resultado.processos || []).map(p => ({
+      numero: p.numero || p.numero_cnj || p.numeroProcesso,
+      tribunal: p.tribunal || 'TJMG',
+      classe: p.classe || '',
+      assunto: p.assunto || '',
+      orgao: p.orgao || '',
+      data: p.data || p.dataAjuizamento || '',
+      partes: p.partes || [],
+      urlProcesso: p.urlProcesso || ''
+    })).filter(p => p.numero);
+
+    if (!processos.length) {
+      await enviarMensagem(token, chatId,
+        '📋 O eproc de 1º grau do TJMG não retornou processos para OAB MG ' + sessao.oab +
+        '. Isso não confirma inexistência de processos em outros sistemas do tribunal, como PJe ou sistemas legados.');
+      return true;
+    }
+
+    const unicos = new Map();
+    for (const p of processos) {
+      const chave = String(p.numero).replace(/\D/g, '');
+      if (chave) unicos.set(chave, p);
+    }
+    const finais = Array.from(unicos.values());
+    const nomeArq = 'OAB_MG' + sessao.oab + '_processos.html';
+    const conteudo = gerarHTML('MG', sessao.oab, finais, null);
+    const kb = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
+
+    await enviarMensagem(token, chatId,
+      '✅ ' + finais.length + ' processo(s) localizado(s) no eproc de 1º grau do TJMG. Gerando o relatório HTML...');
+    await enviarArquivo(token, chatId, nomeArq, conteudo,
+      '📄 ' + nomeArq + '\n' + kb + ' KB — abra no navegador\nOAB: MG ' + sessao.oab +
+      ' | ' + finais.length + ' processo(s)\nFonte: consulta pública do eproc TJMG (1º grau).');
+    return true;
+  } catch (e) {
+    console.error('[TJMG CAPTCHA]', e.message);
+    await enviarMensagem(token, chatId, '❌ Não foi possível concluir a consulta do TJMG: ' + e.message);
+    return true;
   }
 }
 
@@ -603,7 +808,16 @@ exports.handler = async (event) => {
     if (updateId) processados.add(updateId);
     if (processados.size > 500) processados.clear();
 
-    if (/^\/diagmg2$/i.test(texto)) {
+    const replyToId = mensagem.reply_to_message?.message_id;
+    if (texto && replyToId && !texto.startsWith('/')) {
+      const tratado = await processarRespostaCaptchaTJMG(token, chatId, texto, replyToId);
+      if (tratado) return { statusCode: 200, body: 'OK' };
+    }
+
+    if (/^\/cancelar$/i.test(texto)) {
+      await apagarCaptchaTJMG(chatId);
+      await enviarMensagem(token, chatId, 'Sessão de confirmação do TJMG cancelada.');
+    } else if (/^\/diagmg2$/i.test(texto)) {
       await diagnosticarTJMG2(token, chatId);
 
     } else if (/^\/diagmg$/i.test(texto)) {
