@@ -341,6 +341,8 @@ function gerarHTML(estado, numero, processos, nomeAdvogado) {
     const numRaw      = p.numero || p.numeroProcesso || 'N/D';
     const num         = formatarNumeroProcesso(numRaw);
     const link        = `https://supremodoseteoriginal.com/?processo=${num}`;
+    const linkPublicacao = /^https:\/\//i.test(String(p.link || '')) ? String(p.link) : '';
+    const textoPublicacao = String(p.textoPublicacao || '').trim();
     const todasPartes = p.partes || [];
     const poloAtivo   = todasPartes.filter(x => {
       const polo = (x.polo || x.tipoPolo || x.tipo || '').toUpperCase();
@@ -358,7 +360,9 @@ function gerarHTML(estado, numero, processos, nomeAdvogado) {
 
     return `<div class="card">
   <div class="proc-num">PROCESSO: ${esc(num)}</div>
-  <div class="row">🔗 <b>LINK:</b> <a href="${link}" target="_blank">${link}</a></div>
+  <div class="row">🔗 <b>LINK:</b> <a href="${link}" target="_blank" rel="noopener noreferrer">${link}</a></div>
+  ${linkPublicacao ? `<div class="row">📰 <b>PUBLICAÇÃO DJEN:</b> <a href="${esc(linkPublicacao)}" target="_blank" rel="noopener noreferrer">Abrir publicação oficial</a></div>` : ''}
+  ${textoPublicacao ? `<div class="row"><b>📄 TRECHO DA PUBLICAÇÃO:</b> ${esc(textoPublicacao.slice(0, 1800))}</div>` : ''}
   <div class="row">⚖️ <b>TRIBUNAL:</b> ${esc(p.tribunal || 'N/D')}</div>
   <div class="row">📁 <b>CLASSE:</b> ${esc(p.classe || 'N/D')}</div>
   <div class="row">📌 <b>ASSUNTO:</b> ${esc(p.assunto || 'N/D')}</div>
@@ -412,7 +416,7 @@ ${cards}
 async function processarOAB(token, chatId, estado, numero) {
   await enviarMensagem(token, chatId, `🔍 Buscando OAB *${estado} ${numero}*...`);
 
-  const siglasDiretas = { SP: 'TJSP', MS: 'TJMS', MG: 'TJMG' };
+  const siglasDiretas = { SP: 'TJSP', MS: 'TJMS' };
   const siglaDireta = siglasDiretas[estado.toUpperCase()];
   if (siglaDireta) {
     try {
