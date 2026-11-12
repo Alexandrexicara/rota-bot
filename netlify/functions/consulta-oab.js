@@ -1,6 +1,6 @@
 const fetch = require('node-fetch');
 const { limparOAB, separarOAB } = require('../utils/validar');
-const buscarDatajud = require('../tribunais/datajud');
+const { buscarPublicacoesOAB } = require('../tribunais/djen');
 
 async function enviarMensagem(chatId, texto) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -31,16 +31,24 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ erro: 'OAB inválida. Use ?oab=MG12345' }) };
     }
 
-    if (chatId) await enviarMensagem(chatId, `🔍 Buscando OAB ${uf} ${numero} no DataJud/CNJ...`);
-    const processos = await buscarDatajud(oabLimpa);
+    if (chatId) await enviarMensagem(chatId, `🔍 Buscando publicações da OAB ${uf} ${numero} no DJEN/CNJ (últimos 90 dias)...`);
+    const busca = await buscarPublicacoesOAB(uf, numero, 90);
     if (chatId) {
-      await enviarMensagem(chatId, processos.length
-        ? `✅ Busca concluída: ${processos.length} processo(s) localizado(s) para OAB ${uf} ${numero}.`
-        : `Busca concluída. Nenhum processo localizado para OAB ${uf} ${numero} nas consultas que responderam.`);
+      await enviarMensagem(chatId, busca.processos.length
+        ? `✅ ${busca.processos.length} processo(s) localizado(s) em publicações do DJEN/CNJ.`
+        : `Nenhuma publicação localizada para OAB ${uf} ${numero} entre ${busca.dataInicio} e ${busca.dataFim}. Isso não descarta processos sem publicação nesse período.`);
     }
-    return { statusCode: 200, body: JSON.stringify({ uf, numero, total: processos.length, processos }) };
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        uf, numero, total: busca.processos.length,
+        totalPublicacoes: busca.totalPublicacoes,
+        periodo: { inicio: busca.dataInicio, fim: busca.dataFim },
+        processos: busca.processos
+      })
+    };
   } catch (error) {
     console.error('consulta-oab:', error.message);
-    return { statusCode: 502, body: JSON.stringify({ erro: 'Falha na consulta DataJud.', detalhe: error.message }) };
+    return { statusCode: 502, body: JSON.stringify({ erro: 'Falha na consulta ao DJEN/CNJ.', detalhe: error.message }) };
   }
 };
