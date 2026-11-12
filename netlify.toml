@@ -1,5 +1,5 @@
 [build]
-  command = "npm install"
+  command = "npm install && npm test"
   functions = "netlify/functions"
 
 [functions]
