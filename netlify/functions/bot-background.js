@@ -457,11 +457,11 @@ async function processarOAB(token, chatId, estado, numero) {
   // nacionais, sem descartar tribunais diferentes nem duplicar processos.
   const unificados = new Map();
   for (const p of processosNacionais) {
-    const chave = String(p.numero || p.numeroProcesso || '').replace(/\\D/g, '');
+    const chave = String(p.numero || p.numeroProcesso || '').replace(/\D/g, '');
     if (chave) unificados.set(chave, p);
   }
   for (const p of processosDiretos) {
-    const chave = String(p.numero || p.numeroProcesso || '').replace(/\\D/g, '');
+    const chave = String(p.numero || p.numeroProcesso || '').replace(/\D/g, '');
     if (!chave) continue;
     const anterior = unificados.get(chave) || {};
     unificados.set(chave, { ...anterior, ...p });
