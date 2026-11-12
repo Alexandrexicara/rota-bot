@@ -502,37 +502,41 @@ async function processarOAB(token, chatId, estado, numero) {
 const processados = new Set();
 
 async function diagnosticarTJMG(token, chatId) {
-  await enviarMensagem(token, chatId, '🛠 Testando API oficial de pesquisa do TJMG por OAB...');
-  let result;
+  await enviarMensagem(token, chatId, '🛠 Verificando conexão com a API oficial TJMG...');
+  let result = {};
   try {
-    const url = 'https://api1.tjmg.jus.br/cpu/processos?page=0&size=10';
-    const payload = {
-      filter: { representanteMatricula: ['MG171934'] },
-      filterNot: {}
+    const base = 'https://api1.tjmg.jus.br/cpu/';
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Origin': 'https://consulta.tjmg.jus.br',
+      'Referer': 'https://consulta.tjmg.jus.br/pesquisa',
+      'Connection': 'close'
     };
-    const response = await fetch(url, {
+    let ping;
+    try {
+      const r = await fetch(base + 'processos?page=0&size=1', { headers, signal: AbortSignal.timeout(6000) });
+      const t = await r.text();
+      ping = { status: r.status, bytes: Buffer.byteLength(t), body: t.slice(0, 400) };
+    } catch (e) { ping = { error: e.message, name: e.name }; }
+    await enviarMensagem(token, chatId, '🛠 Conexão API: ' + JSON.stringify(ping) + '; enviando filtro OAB...');
+    const payload = { filter: { representanteMatricula: ['MG171934'] }, filterNot: {} };
+    const response = await fetch(base + 'processos?page=0&size=10', {
       method: 'POST',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'Origin': 'https://consulta.tjmg.jus.br',
-        'Referer': 'https://consulta.tjmg.jus.br/pesquisa',
-        'Connection': 'close'
-      },
+      headers,
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(8000)
+      signal: AbortSignal.timeout(25000)
     });
     const body = await response.text();
     let data;
     try { data = JSON.parse(body); } catch { data = body; }
     result = {
-      url,
       status: response.status,
       contentType: response.headers.get('content-type'),
       responseBytes: Buffer.byteLength(body),
       payload,
-      data: typeof data === 'string' ? data.slice(0, 2600) : data
+      data: typeof data === 'string' ? data.slice(0, 2500) : data
     };
   } catch (e) {
     result = { error: e.message, name: e.name, stack: String(e.stack || '').slice(0, 700) };
