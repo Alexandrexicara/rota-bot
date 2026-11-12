@@ -1,10 +1,18 @@
 const fetch = require('node-fetch');
 const https = require('https');
 
+// Import estático: permite que o esbuild inclua o módulo no pacote da função.
+const SCRAPERS = Object.freeze({
+  MG: require('../tribunais/tjmg'),
+});
+
 // ─── HTTP helper ──────────────────────────────────────────────────────────────
-function fetchHtmlTJSP(url) {
+function fetchHtmlTJSP(url, redirects = 0) {
   return new Promise((resolve) => {
-    const req = https.get(url, {
+    let target;
+    try { target = new URL(url); } catch { resolve(''); return; }
+    if (target.protocol !== 'https:' || redirects > 5) { resolve(''); return; }
+    const req = https.get(target, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -13,7 +21,9 @@ function fetchHtmlTJSP(url) {
       }
     }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        fetchHtmlTJSP(res.headers.location).then(resolve);
+        let next;
+        try { next = new URL(res.headers.location, target).toString(); } catch { resolve(''); return; }
+        fetchHtmlTJSP(next, redirects + 1).then(resolve);
         return;
       }
       let data = '';
@@ -181,13 +191,6 @@ async function buscarOABnoESAJ(estado, numeroOAB, maxProcessos = 30) {
   return processos;
 }
 
-// ─── Busca publicações por OAB no DJEN/CNJ ───────────────────────────────────
-async function buscarOABnoTJMG(numeroOAB) {
-  const { buscarPublicacoesOAB } = require('../tribunais/djen');
-  const resultado = await buscarPublicacoesOAB('MG', numeroOAB, 90);
-  return resultado.processos.filter(p => String(p.tribunal || '').toUpperCase().includes('TJMG')).slice(0, 30);
-}
-
 async function enriquecerTJSP(processo) {
   const tribunal = (processo.tribunal || '').toUpperCase();
   if (!tribunal.includes('TJSP')) return processo;
@@ -287,6 +290,7 @@ async function enviarArquivo(token, chatId, nomeArquivo, conteudo, legenda) {
     }
   } catch (e) {
     console.error('enviarArquivo:', e.message);
+    throw e;
   }
 }
 
@@ -440,18 +444,14 @@ async function processarOAB(token, chatId, estado, numero) {
     } else {
       // Cada tribunal possui seu próprio módulo de raspagem.
       // Nunca encaminha a consulta para DJEN/CNJ ou serviço intermediário.
-      const modulos = {
-        MG: '../tribunais/tjmg',
-      };
-      const caminho = modulos[uf];
-      if (!caminho) {
+      const buscar = SCRAPERS[uf];
+      if (!buscar) {
         await enviarMensagem(token, chatId,
           `⚠️ O raspador individual do tribunal de ${uf} ainda não está cadastrado. Nenhuma consulta nacional ou DJEN foi executada.`);
         return;
       }
       tribunal = `TJ${uf}`;
       await enviarMensagem(token, chatId, `🔍 Consultando diretamente o portal do ${tribunal}...`);
-      const buscar = require(caminho);
       const encontrados = await buscar(`${uf}${numero}`);
       processos = (encontrados || []).map(p => ({
         numero: p.numero || p.numero_cnj || p.numeroProcesso,
@@ -490,7 +490,12 @@ async function processarOAB(token, chatId, estado, numero) {
   const conteudo = gerarHTML(uf, numero, finais, null);
   const kb = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
   const legenda = `📄 ${nomeArq}\\n${kb} KB — abra no navegador\\nOAB: ${uf} ${numero} | ${finais.length} processo(s)\\nFonte: raspagem direta do ${tribunal}`;
-  await enviarArquivo(token, chatId, nomeArq, conteudo, legenda);
+  try {
+    await enviarArquivo(token, chatId, nomeArq, conteudo, legenda);
+  } catch (erroEnvio) {
+    await enviarMensagem(token, chatId,
+      `⚠️ ${finais.length} processo(s) foram localizados, mas o relatório HTML não foi enviado: ${erroEnvio.message}`);
+  }
 }
 
 // ─── Controle de duplicatas ───────────────────────────────────────────────────
