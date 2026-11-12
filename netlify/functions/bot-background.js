@@ -544,6 +544,40 @@ async function diagnosticarTJMG(token, chatId) {
   await enviarMensagem(token, chatId, '🔎 RESULTADO API TJMG\n' + JSON.stringify(result).slice(0, 3500));
 }
 
+
+async function diagnosticarTJMG2(token, chatId) {
+  const payload = { filter: { representanteMatricula: ['MG171934'] }, filterNot: {} };
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
+    'Content-Type': 'application/json',
+    'Origin': 'https://consulta.tjmg.jus.br',
+    'Referer': 'https://consulta.tjmg.jus.br/pesquisa'
+  };
+  async function probe(name, url, method = 'GET') {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(url, {
+        method, headers, signal: controller.signal, timeout: 8000,
+        ...(method === 'POST' ? { body: JSON.stringify(payload) } : {})
+      });
+      const body = await response.text();
+      return { name, status: response.status, finalUrl: response.url, contentType: response.headers.get('content-type'), bytes: Buffer.byteLength(body), body: body.slice(0, 900) };
+    } catch (e) {
+      return { name, error: e.message, nameError: e.name };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  await enviarMensagem(token, chatId, '🧪 Testando API externa e proxy do próprio portal TJMG...');
+  const results = [];
+  results.push(await probe('apiLocal GET', 'https://consulta.tjmg.jus.br/processos?page=0&size=1'));
+  results.push(await probe('apiLocal POST', 'https://consulta.tjmg.jus.br/processos?page=0&size=10', 'POST'));
+  results.push(await probe('apiUrl GET', 'https://api1.tjmg.jus.br/cpu/processos?page=0&size=1'));
+  await enviarMensagem(token, chatId, '🔬 DIAGNÓSTICO TJMG 2\n' + JSON.stringify(results).slice(0, 3500));
+}
+
 // ─── Handler — Netlify Background Function ────────────────────────────────────
 // O Netlify responde 202 automaticamente ao Telegram e executa este handler
 // sem limite de 10s — até 15 minutos disponíveis.
@@ -568,7 +602,10 @@ exports.handler = async (event) => {
     if (updateId) processados.add(updateId);
     if (processados.size > 500) processados.clear();
 
-    if (/^\/diagmg$/i.test(texto)) {
+    if (/^\/diagmg2$/i.test(texto)) {
+      await diagnosticarTJMG2(token, chatId);
+
+    } else if (/^\/diagmg$/i.test(texto)) {
       await diagnosticarTJMG(token, chatId);
 
     } else if (/^\/oab\s+/i.test(texto)) {
