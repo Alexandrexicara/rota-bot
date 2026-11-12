@@ -430,7 +430,6 @@ async function processarOAB(token, chatId, estado, numero) {
       // Nunca encaminha a consulta para DJEN/CNJ ou serviço intermediário.
       const modulos = {
         MG: '../tribunais/tjmg',
-        RJ: '../tribunais/tjrj',
       };
       const caminho = modulos[uf];
       if (!caminho) {
