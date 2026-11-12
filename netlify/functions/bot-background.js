@@ -562,11 +562,15 @@ async function diagnosticarTJMG(token, chatId) {
     });
     const response = await post.text();
     const updates = [...response.matchAll(/<update[^>]*id=["']([^"']+)["'][^>]*>([\s\S]*?)<\/update>/gi)]
-      .map(m => ({ id: m[1], content: m[2].replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').slice(0, 1800) }));
+      .map(m => ({ id: m[1], content: m[2].replace(/<!\[CDATA\[|\]\]>/g, '').slice(0, 1200) }));
     const cnjs = [...new Set(response.match(/\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}/g) || [])];
     const count = (response.match(/([0-9.]+)\s*resultados encontrados/i) || [])[1] || '';
-    const messages = updates.filter(x => /message|msg|j_id265/i.test(x.id));
-    return { label, tipo, getStatus: get.status, postStatus: post.status, bytes: Buffer.byteLength(response), cnjs, count, updateIds: updates.map(x => x.id), messages, tableUpdates: updates.filter(x => /processosTable|processosGrid|resultado/i.test(x.id)), responseStart: response.slice(0, 900) };
+    const title = (response.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '';
+    const body = (response.match(/<body[^>]*>([\s\S]*?)<\/body>/i) || [])[1] || response;
+    const bodyText = body.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/\\s+/g, ' ').trim();
+    const formNames = [...new Set([...response.matchAll(/<form[^>]*(?:id|name)=["']([^"']+)["']/gi)].map(m => m[1]))];
+    const inputNames = [...new Set([...response.matchAll(/<input\b[^>]*name=["']([^"']+)["']/gi)].map(m => m[1]))].slice(0, 30);
+    return { label, tipo, getStatus: get.status, postStatus: post.status, bytes: Buffer.byteLength(response), title, cnjs, count, formNames, inputNames, bodyText: bodyText.slice(0, 1300), updateIds: updates.map(x => x.id), updates: updates.slice(0, 3), responseStart: response.slice(0, 300) };
   }
   const results = [];
   for (const [host, label] of [
@@ -578,8 +582,9 @@ async function diagnosticarTJMG(token, chatId) {
       catch (e) { results.push({ label, tipo, error: e.message }); }
     }
   }
-  const output = JSON.stringify(results, null, 2).slice(0, 3400);
-  await enviarMensagem(token, chatId, '🔎 RESULTADO DA CONSULTA PJe TJMG\n\n' + output);
+  for (const item of results) {
+    await enviarMensagem(token, chatId, '🔎 ' + item.label + ' / tipo ' + item.tipo + '\n' + JSON.stringify(item).slice(0, 3200));
+  }
 }
 
 // ─── Handler — Netlify Background Function ────────────────────────────────────
