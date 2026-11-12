@@ -18,13 +18,13 @@ exports.handler = async () => {
         timeout: 25000
       });
       const html = await response.text();
-      const forms = [...html.matchAll(/<form\\b[\\s\\S]*?<\\/form>/gi)].map(m => m[0].slice(0, 18000));
-      const scripts = [...html.matchAll(/<script\\b[^>]*src=["']([^"']+)["'][^>]*>/gi)].map(m => m[1]);
-      const inlineScripts = [...html.matchAll(/<script\\b(?![^>]*src=)[^>]*>([\\s\\S]*?)<\\/script>/gi)].map(m => m[1].slice(0, 5000));
-      const inputs = [...html.matchAll(/<input\\b[^>]*>/gi)].map(m => m[0]);
+      const forms = [...html.matchAll(/<form\b[\s\S]*?<\/form>/gi)].map(m => m[0].slice(0, 18000));
+      const scripts = [...html.matchAll(/<script\b[^>]*src=["']([^"']+)["'][^>]*>/gi)].map(m => m[1]);
+      const inlineScripts = [...html.matchAll(/<script\b(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1].slice(0, 5000));
+      const inputs = [...html.matchAll(/<input\b[^>]*>/gi)].map(m => m[0]);
       results.push({
         url, finalUrl: response.url, status: response.status, bytes: Buffer.byteLength(html),
-        title: (html.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i) || [])[1] || '',
+        title: (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '',
         forms, inputs: inputs.slice(0, 100), scripts: scripts.slice(0, 80),
         inlineScripts: inlineScripts.slice(0, 30),
         markers: ['OAB','advogado','pesquisa','javax.faces.ViewState','csrf','captcha'].map(k => ({key:k, found:html.toLowerCase().includes(k.toLowerCase())}))
