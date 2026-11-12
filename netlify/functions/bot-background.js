@@ -640,7 +640,8 @@ async function processarOAB(token, chatId, estado, numero) {
 
 async function processarRespostaCaptchaTJMG(token, chatId, codigo, replyToMessageId) {
   const sessao = await obterCaptchaTJMG(chatId);
-  if (!sessao || String(sessao.messageId) !== String(replyToMessageId)) return false;
+  if (!sessao) return false;
+  if (replyToMessageId && String(sessao.messageId) !== String(replyToMessageId)) return false;
 
   const resposta = String(codigo || '').trim();
   if (!/^[A-Za-z0-9]{3,10}$/.test(resposta)) {
@@ -809,7 +810,9 @@ exports.handler = async (event) => {
     if (processados.size > 500) processados.clear();
 
     const replyToId = mensagem.reply_to_message?.message_id;
-    if (texto && replyToId && !texto.startsWith('/')) {
+    if (texto && !texto.startsWith('/')) {
+      // Aceita a resposta enviada diretamente ou como resposta à foto do CAPTCHA.
+      // O chat_id identifica a sessão pendente; reply_to_message é opcional.
       const tratado = await processarRespostaCaptchaTJMG(token, chatId, texto, replyToId);
       if (tratado) return { statusCode: 200, body: 'OK' };
     }
