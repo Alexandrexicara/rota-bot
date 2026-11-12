@@ -502,36 +502,26 @@ async function processarOAB(token, chatId, estado, numero) {
 const processados = new Set();
 
 async function diagnosticarTJMG(token, chatId) {
-  await enviarMensagem(token, chatId, '🛠 Testando uma consulta OAB no PJe TJMG...');
-  const httpFetch = require('node-fetch');
+  await enviarMensagem(token, chatId, '🛠 Diagnóstico PJe: iniciando GET...');
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/xml, text/xml, */*; q=0.01',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'pt-BR,pt;q=0.9',
-    'X-Requested-With': 'XMLHttpRequest',
     'Connection': 'close'
   };
   function attr(tag, name) {
     const re = new RegExp("\\b" + name + "=[\"']([^\"']*)[\"']", "i");
     return (tag.match(re) || [])[1] || '';
   }
-  async function getText(url, options, ms) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), ms);
-    try {
-      const res = await httpFetch(url, { ...options, signal: controller.signal });
-      const body = await res.text();
-      return { res, body };
-    } finally { clearTimeout(timer); }
-  }
-  let result;
+  let result = {};
   try {
     const pageUrl = 'https://pje-consulta-publica.tjmg.jus.br/pje/ConsultaPublica/listView.seam';
-    const first = await getText(pageUrl, { headers: { ...headers, Accept: 'text/html,application/xhtml+xml' } }, 6000);
-    const html = first.body;
-    const cookies = (first.res.headers.raw()['set-cookie'] || []).map(x => x.split(';')[0]).join('; ');
+    const get = await fetch(pageUrl, { headers, signal: AbortSignal.timeout(4000) });
+    const html = await get.text();
+    const setCookies = get.headers.getSetCookie ? get.headers.getSetCookie() : [get.headers.get('set-cookie') || ''];
+    const cookies = setCookies.filter(Boolean).map(x => x.split(';')[0]).join('; ');
     const form = (html.match(/<form[^>]*id=["']fPP["'][\s\S]*?<\/form>/i) || [])[0] || '';
-    if (!form) throw new Error('Formulário fPP não encontrado; GET ' + first.res.status);
+    if (!form) throw new Error('fPP ausente no GET HTTP ' + get.status + ' bytes ' + Buffer.byteLength(html));
     const params = new URLSearchParams();
     for (const m of form.matchAll(/<input\b[^>]*>/gi)) {
       const tag = m[0], name = attr(tag, 'name'), type = (attr(tag, 'type') || 'text').toLowerCase();
@@ -553,43 +543,34 @@ async function diagnosticarTJMG(token, chatId) {
     params.set('AJAXREQUEST', 'fPP');
     params.set('fPP:j_id261', 'fPP:j_id261');
     const formTag = (form.match(/<form[^>]*>/i) || [''])[0];
-    const action = new URL(attr(formTag, 'action') || pageUrl, first.res.url).toString();
-    const second = await getText(action, {
+    const action = new URL(attr(formTag, 'action') || pageUrl, get.url).toString();
+    await enviarMensagem(token, chatId, '🛠 Diagnóstico PJe: GET OK (' + get.status + '), formulário e sessão carregados; enviando POST...');
+    const post = await fetch(action, {
       method: 'POST',
       headers: {
         ...headers,
         Cookie: cookies,
-        Referer: first.res.url,
-        Origin: new URL(first.res.url).origin,
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+        Referer: get.url,
+        Origin: new URL(get.url).origin,
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Faces-Request': 'partial/ajax',
+        'X-Requested-With': 'XMLHttpRequest',
+        Accept: 'application/xml, text/xml, */*; q=0.01'
       },
-      body: params.toString()
-    }, 7000);
-    const body = second.body;
-    const updates = [...body.matchAll(/<update[^>]*id=["']([^"']+)["'][^>]*>([\s\S]*?)<\/update>/gi)].map(m => ({ id: m[1], content: m[2].replace(/<!\[CDATA\[|\]\]>/g, '').slice(0, 800) }));
+      body: params.toString(),
+      signal: AbortSignal.timeout(4000)
+    });
+    const body = await post.text();
+    const updates = [...body.matchAll(/<update[^>]*id=["']([^"']+)["'][^>]*>([\s\S]*?)<\/update>/gi)].map(m => ({ id: m[1], content: m[2].replace(/<!\[CDATA\[|\]\]>/g, '').slice(0, 700) }));
     const cnjs = [...new Set(body.match(/\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}/g) || [])];
     const title = (body.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '';
     const inner = (body.match(/<body[^>]*>([\s\S]*?)<\/body>/i) || [])[1] || body;
-    const textBody = inner.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim();
-    result = {
-      getStatus: first.res.status,
-      postStatus: second.res.status,
-      getBytes: Buffer.byteLength(html),
-      postBytes: Buffer.byteLength(body),
-      action,
-      cookieNames: cookies.split(';').map(x => x.split('=')[0]),
-      fieldNames: [...params.keys()],
-      title,
-      cnjs,
-      updateIds: updates.map(x => x.id),
-      updates: updates.slice(0, 2),
-      bodyText: textBody.slice(0, 1200),
-      responseStart: body.slice(0, 350)
-    };
+    const bodyText = inner.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim();
+    result = { getStatus: get.status, postStatus: post.status, getBytes: Buffer.byteLength(html), postBytes: Buffer.byteLength(body), action, cookieNames: cookies.split(';').map(x => x.split('=')[0]), fieldNames: [...params.keys()], title, cnjs, updateIds: updates.map(x => x.id), updates: updates.slice(0, 2), bodyText: bodyText.slice(0, 1100), responseStart: body.slice(0, 250) };
   } catch (e) {
-    result = { error: e.message, name: e.name, stack: String(e.stack || '').slice(0, 800) };
+    result = { error: e.message, name: e.name, stack: String(e.stack || '').slice(0, 700) };
   }
-  await enviarMensagem(token, chatId, '🔎 RESULTADO PJe TJMG\n' + JSON.stringify(result).slice(0, 3500));
+  await enviarMensagem(token, chatId, '🔎 RESULTADO PJe TJMG\n' + JSON.stringify(result).slice(0, 3300));
 }
 
 // ─── Handler — Netlify Background Function ────────────────────────────────────
