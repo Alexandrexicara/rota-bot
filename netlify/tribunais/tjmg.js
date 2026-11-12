@@ -1,7 +1,7 @@
 // Consulta pública oficial do eproc/TJMG por OAB.
-// A API cpu do portal consulta.tjmg.jus.br aponta para IP privado (10.0.35.55)
-// e não pode ser usada fora da rede do Tribunal. Esta integração usa o formulário
-// público do eproc, sem DJEN/CNJ e sem contornar CAPTCHA/autenticação.
+// A API cpu da nova tela de consulta aponta para IP privado; usamos o formulário
+// público do eproc. Se houver CAPTCHA, ele é apresentado ao usuário para resolução
+// humana. Nenhum CAPTCHA é automatizado ou contornado.
 
 const fetch = require('node-fetch');
 
@@ -47,6 +47,19 @@ function getCookieHeader(response) {
   return raw.map(v => String(v).split(';')[0]).filter(Boolean).join('; ');
 }
 
+function mergeCookies(oldCookie, newCookie) {
+  const jar = new Map();
+  for (const pair of String(oldCookie || '').split(';')) {
+    const p = pair.trim();
+    if (p && p.includes('=')) jar.set(p.split('=')[0], p.slice(p.indexOf('=') + 1));
+  }
+  for (const pair of String(newCookie || '').split(';')) {
+    const p = pair.trim();
+    if (p && p.includes('=')) jar.set(p.split('=')[0], p.slice(p.indexOf('=') + 1));
+  }
+  return [...jar.entries()].map(([k, v]) => k + '=' + v).join('; ');
+}
+
 async function request(url, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -60,12 +73,102 @@ async function request(url, options = {}) {
     });
   } catch (error) {
     if (error.name === 'AbortError') {
-      throw new Error('TJMG eproc: tempo limite de ' + TIMEOUT_MS + ' ms excedido em ' + url);
+      throw new Error('TJMG eproc: tempo limite de ' + TIMEOUT_MS + ' ms excedido.');
     }
     throw error;
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function obterFormulario(cookie = '') {
+  const formUrl = new URL(FORM_PATH, BASE).toString();
+  const response = await request(formUrl, {
+    method: 'GET',
+    headers: cookie ? { Cookie: cookie } : {}
+  });
+  if (!response.ok) throw new Error('TJMG eproc: formulário retornou HTTP ' + response.status + '.');
+  const html = (await response.buffer()).toString('latin1');
+  const novoCookie = mergeCookies(cookie, getCookieHeader(response));
+  return { html, cookie: novoCookie, formUrl };
+}
+
+async function extrairImagemCaptcha(html, cookie) {
+  const inline = html.match(/id=["']lblInfraCaptcha["'][^>]*>[\s\S]*?<img\b[^>]*src=["']data:image\/(png|jpe?g);base64,([^"']+)["']/i);
+  if (inline) {
+    const mime = inline[1].toLowerCase().includes('jp') ? 'image/jpeg' : 'image/png';
+    return { imageBuffer: Buffer.from(inline[2].replace(/\s/g, ''), 'base64'), mime };
+  }
+
+  const img = html.match(/id=["']lblInfraCaptcha["'][^>]*>[\s\S]*?<img\b[^>]*src=["']([^"']+)["']/i);
+  if (img && !/^data:/i.test(img[1])) {
+    const imageUrl = new URL(img[1].replace(/&amp;/g, '&'), BASE).toString();
+    const response = await request(imageUrl, {
+      method: 'GET',
+      headers: cookie ? { Cookie: cookie, Referer: new URL(FORM_PATH, BASE).toString() } : {}
+    });
+    if (!response.ok) throw new Error('TJMG eproc: não foi possível obter a imagem do CAPTCHA (HTTP ' + response.status + ').');
+    const mime = response.headers.get('content-type') || 'image/png';
+    return { imageBuffer: await response.buffer(), mime };
+  }
+  return null;
+}
+
+function montarFormulario(oab, captcha = '') {
+  const body = new URLSearchParams();
+  body.append('hdnInfraTipoPagina', '1');
+  body.append('txtNumProcesso', '');
+  body.append('txtNumChave', '');
+  body.append('txtNumChaveDocumento', '');
+  body.append('txtStrParte', '');
+  body.append('chkFonetica', 'N');
+  body.append('chkFonetica', 'S');
+  body.append('txtStrOAB', oab);
+  body.append('rdoTipo', 'CPF');
+  body.append('txtCpfCnpj', '');
+  if (captcha) {
+    body.append('txtInfraCaptcha', captcha);
+    body.append('hdnInfraCaptcha', '0');
+  }
+  body.append('hdnInfraSelecoes', 'Infra');
+  body.append('sbmNovo', 'Consultar');
+  return body.toString();
+}
+
+async function enviarFormulario(oab, captcha, cookie) {
+  const formUrl = new URL(FORM_PATH, BASE).toString();
+  const postUrl = new URL(POST_PATH, BASE).toString();
+  const response = await request(postUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Origin': 'https://eproc-consulta-publica-1g.tjmg.jus.br',
+      'Referer': formUrl,
+      ...(cookie ? { Cookie: cookie } : {})
+    },
+    body: montarFormulario(oab, captcha),
+    redirect: 'manual'
+  });
+
+  let cookieAtualizado = mergeCookies(cookie, getCookieHeader(response));
+  let html = '';
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get('location');
+    if (!location) throw new Error('TJMG eproc redirecionou sem destino (HTTP ' + response.status + ').');
+    const nextUrl = new URL(location, postUrl).toString();
+    const resultResponse = await request(nextUrl, {
+      method: 'GET',
+      headers: { Referer: postUrl, ...(cookieAtualizado ? { Cookie: cookieAtualizado } : {}) },
+      redirect: 'follow'
+    });
+    if (!resultResponse.ok) throw new Error('TJMG eproc resultado: HTTP ' + resultResponse.status + '.');
+    cookieAtualizado = mergeCookies(cookieAtualizado, getCookieHeader(resultResponse));
+    html = (await resultResponse.buffer()).toString('latin1');
+  } else {
+    if (!response.ok) throw new Error('TJMG eproc pesquisa: HTTP ' + response.status + '.');
+    html = (await response.buffer()).toString('latin1');
+  }
+  return { html, cookie: cookieAtualizado };
 }
 
 function extrairLinhas(html) {
@@ -84,7 +187,6 @@ function extrairLinhas(html) {
     const numLivre = (linkText + ' ' + cells.join(' ')).match(/\b\d{20}\b/);
     const numero = numParam ? numParam[1] : (numTexto ? numTexto[0] : (numLivre ? numLivre[0] : ''));
     if (!numero) continue;
-
     const texto = cells.join(' | ');
     linhas.push({
       numero,
@@ -103,7 +205,6 @@ function extrairLinhas(html) {
 function extrairProcessos(html) {
   const resultados = extrairLinhas(html);
   if (resultados.length) return resultados;
-
   const numeros = new Set();
   const re = /(?:num_processo|numeroProcesso)=([0-9]{20})/gi;
   let m;
@@ -113,96 +214,91 @@ function extrairProcessos(html) {
     for (const item of cnj) numeros.add(item[0]);
   }
   return [...numeros].map(numero => ({
-    numero, tribunal: 'TJMG', classe: '', assunto: '', orgao: '', data: '', partes: []
+    numero, tribunal: 'TJMG', classe: '', assunto: '', orgao: '', data: '', partes: [], urlProcesso: ''
   }));
+}
+
+function interpretarResultado(html) {
+  if (/cf-turnstile|g-recaptcha/i.test(html)) {
+    throw new Error('O portal eproc apresentou um desafio CAPTCHA interativo. A consulta foi interrompida.');
+  }
+  if (/captcha[\s\S]{0,120}incorreto|código da imagem[\s\S]{0,80}incorreto/i.test(limparHtml(html))) {
+    return { captchaIncorreto: true };
+  }
+  const processos = extrairProcessos(html).filter(p => p.numero).slice(0, MAX_PROCESSOS);
+  if (processos.length) return { processos };
+  if (/Nenhum registro encontrado|Nenhum processo encontrado|Não foram encontrados registros/i.test(limparHtml(html))) {
+    return { processos: [] };
+  }
+  if (/id=["']frmProcessoLista["']/i.test(html)) {
+    const captcha = /txtInfraCaptcha|lblInfraCaptcha/i.test(html);
+    if (captcha) return { formularioComCaptcha: true };
+    throw new Error('O TJMG devolveu o formulário sem lista de processos. A pesquisa não foi confirmada.');
+  }
+  throw new Error('A resposta do eproc não contém resultados reconhecíveis; consulta não considerada concluída.');
 }
 
 async function buscarOABnoTJMG(oabCompleta) {
   const match = String(oabCompleta || '').trim().toUpperCase().match(/^MG\s*(\d+)$/);
   if (!match) throw new Error('Informe a OAB de Minas Gerais no formato MG + número.');
-
   const oab = 'MG' + match[1];
-  const formUrl = new URL(FORM_PATH, BASE).toString();
-  const postUrl = new URL(POST_PATH, BASE).toString();
 
-  const formResponse = await request(formUrl, { method: 'GET' });
-  if (!formResponse.ok) {
-    throw new Error('TJMG eproc: formulário retornou HTTP ' + formResponse.status + '.');
+  const form = await obterFormulario();
+  if (/cf-turnstile|g-recaptcha/i.test(form.html)) {
+    throw new Error('O portal eproc apresentou CAPTCHA interativo. A consulta automática foi interrompida.');
   }
-
-  const formBuffer = await formResponse.buffer();
-  const formHtml = formBuffer.toString('latin1');
-  const cookie = getCookieHeader(formResponse);
-
-  // Se o tribunal ativar CAPTCHA, não tentamos resolvê-lo nem contorná-lo.
-  if (/cf-turnstile|g-recaptcha|txtInfraCaptcha|lblInfraCaptcha/i.test(formHtml)) {
-    throw new Error('O portal eproc apresentou CAPTCHA. A consulta automática foi interrompida por segurança.');
-  }
-  if (!/id=["']frmProcessoLista["']/i.test(formHtml) || !/id=["']txtStrOAB["']/i.test(formHtml)) {
+  if (!/id=["']frmProcessoLista["']/i.test(form.html) || !/id=["']txtStrOAB["']/i.test(form.html)) {
     throw new Error('O formulário público de OAB do eproc mudou ou não foi disponibilizado.');
   }
 
-  const body = new URLSearchParams();
-  body.append('hdnInfraTipoPagina', '1');
-  body.append('txtNumProcesso', '');
-  body.append('txtNumChave', '');
-  body.append('txtNumChaveDocumento', '');
-  body.append('txtStrParte', '');
-  body.append('chkFonetica', 'N');
-  body.append('chkFonetica', 'S');
-  body.append('txtStrOAB', oab);
-  body.append('rdoTipo', 'CPF');
-  body.append('txtCpfCnpj', '');
-  body.append('hdnInfraSelecoes', 'Infra');
-  body.append('sbmNovo', 'Consultar');
-
-  const postHeaders = {
-    'Content-Type': 'application/x-www-form-urlencoded',
-    'Origin': 'https://eproc-consulta-publica-1g.tjmg.jus.br',
-    'Referer': formUrl,
-    ...(cookie ? { Cookie: cookie } : {})
-  };
-
-  const postResponse = await request(postUrl, {
-    method: 'POST',
-    headers: postHeaders,
-    body: body.toString(),
-    redirect: 'manual'
-  });
-
-  let resultHtml = '';
-  if (postResponse.status >= 300 && postResponse.status < 400) {
-    const location = postResponse.headers.get('location');
-    if (!location) throw new Error('TJMG eproc redirecionou sem destino (HTTP ' + postResponse.status + ').');
-    const nextUrl = new URL(location, postUrl).toString();
-    const resultResponse = await request(nextUrl, {
-      method: 'GET',
-      headers: { Referer: postUrl, ...(cookie ? { Cookie: cookie } : {}) },
-      redirect: 'follow'
-    });
-    if (!resultResponse.ok) throw new Error('TJMG eproc resultado: HTTP ' + resultResponse.status + '.');
-    resultHtml = (await resultResponse.buffer()).toString('latin1');
-  } else {
-    if (!postResponse.ok) throw new Error('TJMG eproc pesquisa: HTTP ' + postResponse.status + '.');
-    resultHtml = (await postResponse.buffer()).toString('latin1');
+  const temCaptcha = /id=["']lblInfraCaptcha["']|name=["']txtInfraCaptcha["']/i.test(form.html);
+  if (temCaptcha) {
+    const image = await extrairImagemCaptcha(form.html, form.cookie);
+    if (!image || !image.imageBuffer || !image.imageBuffer.length) {
+      throw new Error('O TJMG solicitou CAPTCHA, mas a imagem não pôde ser obtida para resolução manual.');
+    }
+    return {
+      requiresCaptcha: true,
+      oab: match[1],
+      cookie: form.cookie,
+      imageBuffer: image.imageBuffer,
+      mime: image.mime
+    };
   }
 
-  if (/cf-turnstile|g-recaptcha|txtInfraCaptcha|lblInfraCaptcha/i.test(resultHtml)) {
-    throw new Error('O portal eproc solicitou CAPTCHA durante a pesquisa. Nenhum mecanismo automático foi usado.');
+  const result = await enviarFormulario(oab, '', form.cookie);
+  const interpreted = interpretarResultado(result.html);
+  if (interpreted.formularioComCaptcha) {
+    const nextForm = await obterFormulario(result.cookie);
+    const image = await extrairImagemCaptcha(nextForm.html, nextForm.cookie);
+    if (!image) throw new Error('O TJMG solicitou CAPTCHA, mas a imagem não pôde ser obtida.');
+    return { requiresCaptcha: true, oab: match[1], cookie: nextForm.cookie, imageBuffer: image.imageBuffer, mime: image.mime };
   }
+  if (interpreted.captchaIncorreto) throw new Error('O TJMG rejeitou a confirmação visual. Tente iniciar a consulta novamente.');
+  return interpreted.processos || [];
+}
 
-  const processos = extrairProcessos(resultHtml).filter(p => p.numero).slice(0, MAX_PROCESSOS);
-  if (processos.length) return processos;
+async function submeterCaptchaTJMG(session, codigo) {
+  const oab = 'MG' + String(session.oab || '').replace(/\D/g, '');
+  const result = await enviarFormulario(oab, String(codigo || '').trim(), session.cookie || '');
+  const interpreted = interpretarResultado(result.html);
 
-  if (/Nenhum registro encontrado|Nenhum processo encontrado|Não foram encontrados registros/i.test(limparHtml(resultHtml))) {
-    return [];
+  if (interpreted.captchaIncorreto || interpreted.formularioComCaptcha) {
+    const nextForm = await obterFormulario(result.cookie);
+    const image = await extrairImagemCaptcha(nextForm.html, nextForm.cookie);
+    if (!image || !image.imageBuffer || !image.imageBuffer.length) {
+      throw new Error('O TJMG recusou o código e não disponibilizou uma nova imagem de CAPTCHA.');
+    }
+    return {
+      requiresCaptcha: true,
+      oab: String(session.oab || '').replace(/\D/g, ''),
+      cookie: nextForm.cookie,
+      imageBuffer: image.imageBuffer,
+      mime: image.mime
+    };
   }
-
-  if (/id=["']frmProcessoLista["']/i.test(resultHtml)) {
-    throw new Error('O TJMG devolveu o formulário sem lista de processos. A pesquisa não foi confirmada.');
-  }
-
-  throw new Error('A resposta do eproc não contém resultados reconhecíveis; consulta não considerada concluída.');
+  return { requiresCaptcha: false, processos: interpreted.processos || [] };
 }
 
 module.exports = buscarOABnoTJMG;
+module.exports.submeterCaptcha = submeterCaptchaTJMG;
