@@ -355,7 +355,7 @@ function gerarHTML(estado, numero, processos, nomeAdvogado) {
   const cards = processos.map((p) => {
     const numRaw      = p.numero || p.numeroProcesso || 'N/D';
     const num         = formatarNumeroProcesso(numRaw);
-    const link        = `https://supremodoseteoriginal.com/?processo=${num}`;
+    const link        = /^https?:\/\//i.test(String(p.urlProcesso || '')) ? String(p.urlProcesso) : `https://supremodoseteoriginal.com/?processo=${num}`;
     const linkPublicacao = /^https:\/\//i.test(String(p.link || '')) ? String(p.link) : '';
     const textoPublicacao = String(p.textoPublicacao || '').trim();
     const todasPartes = p.partes || [];
@@ -461,6 +461,7 @@ async function processarOAB(token, chatId, estado, numero) {
         orgao: p.orgao || '',
         data: p.data || p.dataAjuizamento || '',
         partes: p.partes || [],
+        urlProcesso: p.urlProcesso || '',
       })).filter(p => p.numero);
     }
   } catch (e) {
