@@ -94,7 +94,7 @@ function extrairLinhas(html) {
       orgao: cells.find(v => /vara|juizado|câmara|camara|unidade|comarca/i.test(v)) || '',
       data: (texto.match(/\b\d{2}\/\d{2}\/\d{4}\b/) || [])[0] || '',
       partes: [],
-      link: href ? new URL(href, BASE).toString() : ''
+      urlProcesso: href ? new URL(href, BASE).toString() : ''
     });
   }
   return linhas;
