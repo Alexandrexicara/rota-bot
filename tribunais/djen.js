@@ -1,6 +1,8 @@
 const fetch = require('node-fetch');
 
 const API_URL = 'https://comunicaapi.pje.jus.br/api/v1/comunicacao';
+const PROXY_URL = String(process.env.DJEN_PROXY_URL || '').trim();
+const PROXY_SECRET = String(process.env.DJEN_PROXY_SECRET || '').trim();
 const DIAS_PADRAO = 90;
 const MAX_PAGINAS = 10;
 
@@ -46,7 +48,7 @@ function mapear(item) {
 }
 
 async function requisitar(params) {
-  const url = new URL(API_URL);
+  const url = new URL(PROXY_URL || API_URL);
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
   }
@@ -54,7 +56,11 @@ async function requisitar(params) {
   for (let tentativa = 1; tentativa <= 3; tentativa++) {
     try {
       const response = await fetch(url.toString(), {
-        headers: { Accept: 'application/json', 'User-Agent': 'ProcessosBot/1.0 (consulta pública DJEN)' },
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'ProcessosBot/1.0 (consulta pública DJEN)',
+          ...(PROXY_URL && PROXY_SECRET ? { 'x-proxy-secret': PROXY_SECRET } : {})
+        },
         timeout: 20000
       });
       if (response.status === 429 || response.status >= 500) {
@@ -67,6 +73,9 @@ async function requisitar(params) {
       }
       if (!response.ok) {
         const detalhe = (await response.text().catch(() => '')).slice(0, 250);
+        if (response.status === 403 && !PROXY_URL) {
+          throw new Error('DJEN HTTP 403: o acesso direto foi bloqueado pela origem da função. Configure DJEN_PROXY_URL e DJEN_PROXY_SECRET para usar o proxy hospedado em São Paulo (Vercel gru1).');
+        }
         throw new Error(`DJEN HTTP ${response.status}: ${detalhe}`);
       }
       const data = await response.json();
