@@ -477,20 +477,20 @@ async function processarOAB(token, chatId, estado, numero) {
       ? ` entre ${periodoDjen.inicio} e ${periodoDjen.fim}`
       : ' nos últimos 90 dias';
     await enviarMensagem(token, chatId,
-      `📋 Nenhuma publicação localizada para OAB *${estado} ${numero}*${periodo}. Isso não significa que não existam processos sem publicação nesse período.\\n\\n_Fonte: DJEN/CNJ e portais públicos consultados._`
+      `📋 Nenhuma publicação localizada para OAB *${estado} ${numero}*${periodo}. Isso não significa que não existam processos sem publicação nesse período.\n\n_Fonte: DJEN/CNJ e portais públicos consultados._`
     );
     return;
   }
 
   await enviarMensagem(token, chatId,
-    `✅ *${processosFinais.length} processo(s) localizado(s)*\\n📁 Gerando relatório HTML nacional...`
+    `✅ *${processosFinais.length} processo(s) localizado(s)*\n📁 Gerando relatório HTML nacional...`
   );
 
   const nomeArq = `OAB_${estado}${numero}_processos.html`;
   const conteudo = gerarHTML(estado, numero, processosFinais, null);
   const kb = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
   const fontes = [...new Set(processosFinais.map(p => p.tribunal).filter(Boolean))].join(', ');
-  const legenda = `🌐 ${nomeArq}\\n${kb} KB — abra no navegador\\nOAB: ${estado} ${numero} | 📊 ${processosFinais.length} processo(s)\\nTribunais: ${fontes || 'fontes públicas'}`;
+  const legenda = `🌐 ${nomeArq}\n${kb} KB — abra no navegador\nOAB: ${estado} ${numero} | 📊 ${processosFinais.length} processo(s)\nTribunais: ${fontes || 'fontes públicas'}`;
   await enviarArquivo(token, chatId, nomeArq, conteudo, legenda);
 
   if (avisoDjen) {
