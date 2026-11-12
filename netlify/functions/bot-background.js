@@ -235,15 +235,18 @@ function resolverToken(event) {
 
 // ─── Enviar mensagem de texto ─────────────────────────────────────────────────
 async function enviarMensagem(token, chatId, texto) {
-  try {
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text: texto, parse_mode: 'Markdown' }),
-    });
-  } catch (e) {
-    console.error('enviarMensagem:', e.message);
+  if (!token) throw new Error('TELEGRAM_BOT_TOKEN não configurado no Netlify.');
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text: texto, parse_mode: 'Markdown' }),
+    timeout: 15000,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.description || `Telegram sendMessage HTTP ${response.status}`);
   }
+  return data;
 }
 
 // ─── Enviar arquivo HTML (multipart manual, node-fetch v2) ───────────────────
@@ -262,14 +265,19 @@ async function enviarArquivo(token, chatId, nomeArquivo, conteudo, legenda) {
       fileBuffer,
       Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
     ]);
-    await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
       method: 'POST',
       headers: {
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
         'Content-Length': body.length,
       },
       body,
+      timeout: 30000,
     });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) {
+      throw new Error(data.description || `Telegram sendDocument HTTP ${response.status}`);
+    }
   } catch (e) {
     console.error('enviarArquivo:', e.message);
   }
@@ -489,6 +497,7 @@ const processados = new Set();
 exports.handler = async (event) => {
   try {
     const token    = resolverToken(event);
+    if (!token) throw new Error('TELEGRAM_BOT_TOKEN não configurado no Netlify.');
     const body     = JSON.parse(event.body || '{}');
     const updateId = body.update_id;
     const mensagem = body.message || {};
