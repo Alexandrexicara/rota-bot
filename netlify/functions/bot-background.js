@@ -510,7 +510,7 @@ async function diagnosticarTJMG(token, chatId) {
     'Accept-Language': 'pt-BR,pt;q=0.9'
   };
   function attr(tag, name) {
-    const re = new RegExp('\\\\b' + name + '=["\\']([^"\\']*)["\\']', 'i');
+    const re = new RegExp("\\b" + name + "=[\"']([^\"']*)[\"']", "i");
     return (tag.match(re) || [])[1] || '';
   }
   async function searchPje(host, label, tipo) {
