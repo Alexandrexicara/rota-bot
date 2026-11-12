@@ -73,6 +73,24 @@ exports.handler = async (event) => {
       return { statusCode: 200, body: 'OK' };
     }
 
+    if (texto && !texto.startsWith('/')) {
+      // Encaminha respostas de CAPTCHA (texto comum) ao processador em background.
+      // Se não houver sessão pendente, o background simplesmente ignora a mensagem.
+      const url = new URL('/.netlify/functions/bot-background', baseUrl(event));
+      if (token) url.searchParams.set('token', token);
+      const response = await fetch(url.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        timeout: 15000
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        console.error('Falha ao encaminhar resposta de CAPTCHA:', response.status, detail.slice(0, 300));
+      }
+      return { statusCode: 200, body: 'OK' };
+    }
+
     if (comando === '/oab') {
       const arg = texto.replace(/^\/oab(?:@[^\s]+)?\s*/i, '').trim();
       const match = arg.match(/^([A-Za-z]{2})\s*[-/]?\s*(\d{1,10})$/);
