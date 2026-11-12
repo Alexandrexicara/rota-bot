@@ -47,4 +47,9 @@ async function testEndpoints() {
   }
 }
 
-testEndpoints();
+
+// Este arquivo é um teste manual; não deve executar chamadas de rede durante o build do Netlify.
+// Para executar manualmente: RUN_MANUAL_TESTS=1 node test-key.js
+if (require.main === module && process.env.RUN_MANUAL_TESTS === '1') {
+  testEndpoints();
+}
