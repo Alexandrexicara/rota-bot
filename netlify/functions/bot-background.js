@@ -170,17 +170,13 @@ async function buscarOABnoESAJ(estado, numeroOAB, maxProcessos = 30) {
   return processos;
 }
 
-// ─── Busca TJMG no índice público DataJud ────────────────────────────────────
+// ─── Busca publicações por OAB no DJEN/CNJ ───────────────────────────────────
 async function buscarOABnoTJMG(numeroOAB) {
-  const buscarDatajud = require('../tribunais/datajud');
-  const processos = await buscarDatajud(`MG${numeroOAB}`);
-  return processos
-    .filter(processo => (processo.tribunal || '').toUpperCase().includes('TJMG'))
-    .slice(0, 30)
-    .map(processo => ({ ...processo, numero: processo.numero || processo.numeroProcesso }));
+  const { buscarPublicacoesOAB } = require('../tribunais/djen');
+  const resultado = await buscarPublicacoesOAB('MG', numeroOAB, 90);
+  return resultado.processos.filter(p => String(p.tribunal || '').toUpperCase().includes('TJMG')).slice(0, 30);
 }
 
-// ─── Enriquece processos do TJSP vindos do DataJud ───────────────────────────
 async function enriquecerTJSP(processo) {
   const tribunal = (processo.tribunal || '').toUpperCase();
   if (!tribunal.includes('TJSP')) return processo;
@@ -442,47 +438,38 @@ async function processarOAB(token, chatId, estado, numero) {
     }
   }
 
-  // ── Busca de fallback executada dentro das funções Netlify ────────────────
+  // ── Fallback nacional: API pública do DJEN/CNJ, que permite filtro por OAB ──
   try {
-    const buscarDatajud = require('../tribunais/datajud');
-    const encontrados = await buscarDatajud(`${estado.toUpperCase()}${numero}`);
-    const unicos = new Map();
-    for (const processo of encontrados) {
-      const numeroProcesso = processo.numero || processo.numeroProcesso;
-      if (numeroProcesso && !unicos.has(numeroProcesso)) {
-        unicos.set(numeroProcesso, { ...processo, numero: numeroProcesso });
-      }
-    }
-    const processos = Array.from(unicos.values());
+    const { buscarPublicacoesOAB } = require('../tribunais/djen');
+    const busca = await buscarPublicacoesOAB(estado, numero, 90);
+    const processos = busca.processos;
     const total = processos.length;
 
     if (total === 0) {
       await enviarMensagem(token, chatId,
-        `📋 Nenhum processo encontrado para OAB *${estado} ${numero}* no DataJud/CNJ.`
+        `📋 Nenhuma publicação localizada para OAB *${estado} ${numero}* no DJEN entre ${busca.dataInicio} e ${busca.dataFim}. Isso não significa que não existam outros processos sem publicação nesse período.\\n\\n_Fonte: DJEN/CNJ_`
       );
       return;
     }
 
-    const temTJSP = processos.some(p => (p.tribunal || '').toUpperCase().includes('TJSP'));
+    const temTJSP = processos.some(p => String(p.tribunal || '').toUpperCase().includes('TJSP'));
     let processosFinais = processos;
     if (temTJSP) {
-      await enviarMensagem(token, chatId, `✅ *Encontrados ${total} processos no DataJud/CNJ*\n🔍 Buscando dados completos no TJSP...`);
+      await enviarMensagem(token, chatId, `✅ *${total} processo(s) localizado(s) em publicações do DJEN/CNJ*\\n🔍 Complementando dados públicos do TJSP...`);
       processosFinais = await enriquecerListaTJSP(processos);
     } else {
-      await enviarMensagem(token, chatId, `✅ *Encontrados ${total} processos no DataJud/CNJ*\n📁 Gerando arquivo HTML...`);
+      await enviarMensagem(token, chatId, `✅ *${total} processo(s) localizado(s) em publicações do DJEN/CNJ*\\n📁 Gerando arquivo HTML...`);
     }
 
-    const nomeArq  = `OAB_${estado}${numero}_processos.html`;
+    const nomeArq = `OAB_${estado}${numero}_processos.html`;
     const conteudo = gerarHTML(estado, numero, processosFinais, null);
-    const kb       = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
-
+    const kb = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
     await enviarArquivo(token, chatId, nomeArq, conteudo,
-      `🌐 ${nomeArq}\n${kb} KB — abra no navegador\nOAB: ${estado}${numero} | 📊 ${total} processos`
+      `🌐 ${nomeArq}\\n${kb} KB — abra no navegador\\nOAB: ${estado}${numero} | 📊 ${total} processo(s)\\nFonte: DJEN/CNJ (últimos 90 dias)`
     );
-
   } catch (e) {
     console.error('processarOAB error:', e);
-    await enviarMensagem(token, chatId, `❌ Erro ao consultar o DataJud/CNJ: ${e.message}`);
+    await enviarMensagem(token, chatId, `❌ Não foi possível concluir a consulta à API do DJEN/CNJ: ${e.message}`);
   }
 }
 
