@@ -53,6 +53,26 @@ exports.handler = async (event) => {
     }
 
     const comando = texto.split(/\s+/)[0].replace(/@[^@]+$/, '').toLowerCase();
+    if (comando === '/diagmg') {
+      const url = new URL('/.netlify/functions/bot-background', baseUrl(event));
+      if (token) url.searchParams.set('token', token);
+      const response = await fetch(url.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        timeout: 15000
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        console.error('Falha ao iniciar diagnóstico TJMG:', response.status, detail.slice(0, 300));
+        await telegram(token, 'sendMessage', {
+          chat_id: chatId,
+          text: '⚠️ Não consegui iniciar o diagnóstico TJMG.'
+        });
+      }
+      return { statusCode: 200, body: 'OK' };
+    }
+
     if (comando === '/oab') {
       const arg = texto.replace(/^\/oab(?:@[^\s]+)?\s*/i, '').trim();
       const match = arg.match(/^([A-Za-z]{2})\s*[-/]?\s*(\d{1,10})$/);
