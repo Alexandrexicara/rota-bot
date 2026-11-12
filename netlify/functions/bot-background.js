@@ -502,66 +502,84 @@ async function processarOAB(token, chatId, estado, numero) {
 const processados = new Set();
 
 async function diagnosticarTJMG(token, chatId) {
-  await enviarMensagem(token, chatId, '🛠 Iniciando diagnóstico dos portais oficiais TJMG...');
+  await enviarMensagem(token, chatId, '🛠 Testando a pesquisa OAB no PJe oficial do TJMG...');
+  const httpFetch = require('node-fetch');
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'pt-BR,pt;q=0.9'
   };
-  const snippets = [];
-  async function inspectPage(url, terms, label) {
-    const res = await fetch(url, { headers, timeout: 20000 });
-    const html = await res.text();
-    const scripts = [...html.matchAll(/<script\b[^>]*src=["']([^"']+)["'][^>]*>/gi)]
-      .map(m => new URL(m[1], url).toString()).slice(0, 25);
-    const inline = [...html.matchAll(/<script\b(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
-    const button = (html.match(/<input[^>]*id=["']fPP:searchProcessos["'][^>]*>/i) || [])[0] || '';
-    const oabFields = [...html.matchAll(/<input\b[^>]*>/gi)].map(m => m[0]).filter(x => /numeroOAB|j_id240/i.test(x));
-    snippets.push(label + ': HTTP ' + res.status + '; ' + Buffer.byteLength(html) + ' bytes; ' + scripts.length + ' scripts');
-    if (button) snippets.push('BOTÃO PJe: ' + button.slice(0, 900));
-    if (oabFields.length) snippets.push('CAMPOS OAB: ' + oabFields.join(' | ').slice(0, 1200));
-    for (const block of inline) {
-      for (const term of terms) {
-        const i = block.toLowerCase().indexOf(term.toLowerCase());
-        if (i >= 0) snippets.push('INLINE ' + term + ': ' + block.slice(Math.max(0, i - 300), i + 1000));
-      }
-    }
-    const selected = scripts.filter(u => /pje|global|recaptcha|menu|a4j|richfaces|chunk/i.test(u));
-    const found = await Promise.all(selected.map(async u => {
-      try {
-        const r = await fetch(u, { headers, timeout: 12000 });
-        const js = await r.text();
-        const hits = [];
-        for (const term of terms) {
-          let from = 0, count = 0, i;
-          while ((i = js.toLowerCase().indexOf(term.toLowerCase(), from)) >= 0 && count < 2) {
-            hits.push(term + ': ' + js.slice(Math.max(0, i - 300), i + 1000));
-            from = i + term.length;
-            count++;
-          }
-        }
-        return hits.length ? u + '\n' + hits.join('\n---\n') : '';
-      } catch (e) { return u + ': ' + e.message; }
-    }));
-    snippets.push(...found.filter(Boolean).slice(0, 12));
-    snippets.push('SCRIPTS ' + label + ': ' + scripts.join('\n'));
+  function attr(tag, name) {
+    const re = new RegExp('\\\\b' + name + '=["\\']([^"\\']*)["\\']', 'i');
+    return (tag.match(re) || [])[1] || '';
   }
-  try {
-    await inspectPage(
-      'https://pje-consulta-publica.tjmg.jus.br/pje/ConsultaPublica/listView.seam',
-      ['executarPesquisa', 'executarReCaptcha', 'searchProcessos', 'numeroOAB', 'AJAXREQUEST'],
-      'PJe 1º grau'
-    );
-  } catch (e) { snippets.push('ERRO PJe: ' + e.message); }
-  try {
-    await inspectPage(
-      'https://consulta.tjmg.jus.br/pesquisa',
-      ['oabRepresentante', 'numeroOab', 'numeroOAB', 'ufOab', 'OAB do Representante', 'api/', 'axios'],
-      'Pesquisa unificada'
-    );
-  } catch (e) { snippets.push('ERRO pesquisa unificada: ' + e.message); }
-  const output = snippets.join('\n\n').slice(0, 3600);
-  await enviarMensagem(token, chatId, '🔎 DIAGNÓSTICO TJMG\n\n' + output);
+  async function searchPje(host, label, tipo) {
+    const pageUrl = host + '/pje/ConsultaPublica/listView.seam';
+    const get = await httpFetch(pageUrl, { headers, timeout: 15000 });
+    const html = await get.text();
+    const cookies = (get.headers.raw()['set-cookie'] || []).map(x => x.split(';')[0]).join('; ');
+    const form = (html.match(/<form[^>]*id=["']fPP["'][\s\S]*?<\/form>/i) || [])[0] || '';
+    if (!form) throw new Error(label + ': formulário fPP não encontrado');
+    const params = new URLSearchParams();
+    for (const m of form.matchAll(/<input\b[^>]*>/gi)) {
+      const tag = m[0], name = attr(tag, 'name'), type = (attr(tag, 'type') || 'text').toLowerCase();
+      if (!name || ['button','reset','file','image'].includes(type)) continue;
+      if (['checkbox','radio'].includes(type) && !/\bchecked(?:=["'][^"']*["'])?/i.test(tag)) continue;
+      params.set(name, attr(tag, 'value'));
+    }
+    for (const m of form.matchAll(/<select\b[^>]*>[\s\S]*?<\/select>/gi)) {
+      const tag = m[0], name = attr(tag, 'name');
+      if (!name) continue;
+      const options = [...tag.matchAll(/<option\b[^>]*>/gi)].map(x => x[0]);
+      const chosen = options.find(x => /\bselected(?:=["'][^"']*["'])?/i.test(x)) || options[0];
+      params.set(name, attr(chosen || '', 'value'));
+    }
+    for (const m of form.matchAll(/<textarea\b([^>]*)>([\s\S]*?)<\/textarea>/gi)) {
+      const name = attr(m[1], 'name');
+      if (name) params.set(name, m[2]);
+    }
+    params.set('fPP:Decoration:numeroOAB', '171934');
+    params.set('fPP:Decoration:j_id240', tipo);
+    params.set('fPP:Decoration:estadoComboOAB', '12');
+    params.set('AJAXREQUEST', '_viewRoot');
+    params.set('AJAX:EVENTS_COUNT', '1');
+    params.set('fPP:j_id261', 'fPP:j_id261');
+    const action = new URL(attr((form.match(/<form[^>]*>/i) || [''])[0], 'action') || pageUrl, get.url).toString();
+    const post = await httpFetch(action, {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Cookie': cookies,
+        'Referer': get.url,
+        'Origin': new URL(get.url).origin,
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Faces-Request': 'partial/ajax',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Accept': 'application/xml, text/xml, */*; q=0.01'
+      },
+      body: params.toString(),
+      timeout: 25000
+    });
+    const response = await post.text();
+    const updates = [...response.matchAll(/<update[^>]*id=["']([^"']+)["'][^>]*>([\s\S]*?)<\/update>/gi)]
+      .map(m => ({ id: m[1], content: m[2].replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').slice(0, 1800) }));
+    const cnjs = [...new Set(response.match(/\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}/g) || [])];
+    const count = (response.match(/([0-9.]+)\s*resultados encontrados/i) || [])[1] || '';
+    const messages = updates.filter(x => /message|msg|j_id265/i.test(x.id));
+    return { label, tipo, getStatus: get.status, postStatus: post.status, bytes: Buffer.byteLength(response), cnjs, count, updateIds: updates.map(x => x.id), messages, tableUpdates: updates.filter(x => /processosTable|processosGrid|resultado/i.test(x.id)), responseStart: response.slice(0, 900) };
+  }
+  const results = [];
+  for (const [host, label] of [
+    ['https://pje-consulta-publica.tjmg.jus.br', 'PJe 1º grau'],
+    ['https://pjerecursal.tjmg.jus.br', 'PJe Recursal']
+  ]) {
+    for (const tipo of ['N', 'A']) {
+      try { results.push(await searchPje(host, label, tipo)); }
+      catch (e) { results.push({ label, tipo, error: e.message }); }
+    }
+  }
+  const output = JSON.stringify(results, null, 2).slice(0, 3400);
+  await enviarMensagem(token, chatId, '🔎 RESULTADO DA CONSULTA PJe TJMG\n\n' + output);
 }
 
 // ─── Handler — Netlify Background Function ────────────────────────────────────
