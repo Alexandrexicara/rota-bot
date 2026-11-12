@@ -1,7 +1,9 @@
 const fetch = require('node-fetch');
 
-function getToken() {
-  return process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN_2 || '';
+function getToken(event) {
+  const tokens = [process.env.TELEGRAM_BOT_TOKEN, process.env.TELEGRAM_BOT_TOKEN_2].filter(Boolean);
+  const requested = event?.queryStringParameters?.token;
+  return requested && tokens.includes(requested) ? requested : (tokens[0] || '');
 }
 
 function baseUrl(event) {
@@ -32,7 +34,7 @@ exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Method not allowed' };
 
   try {
-    const token = getToken();
+    const token = getToken(event);
     if (!token) {
       console.error('TELEGRAM_BOT_TOKEN não configurado.');
       return { statusCode: 200, body: 'OK' };
@@ -63,6 +65,7 @@ exports.handler = async (event) => {
       }
 
       const url = new URL('/.netlify/functions/bot-background', baseUrl(event));
+      if (token) url.searchParams.set('token', token);
       const response = await fetch(url.toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
