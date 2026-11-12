@@ -501,6 +501,69 @@ async function processarOAB(token, chatId, estado, numero) {
 // ─── Controle de duplicatas ───────────────────────────────────────────────────
 const processados = new Set();
 
+async function diagnosticarTJMG(token, chatId) {
+  await enviarMensagem(token, chatId, '🛠 Iniciando diagnóstico dos portais oficiais TJMG...');
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'pt-BR,pt;q=0.9'
+  };
+  const snippets = [];
+  async function inspectPage(url, terms, label) {
+    const res = await fetch(url, { headers, timeout: 20000 });
+    const html = await res.text();
+    const scripts = [...html.matchAll(/<script\b[^>]*src=["']([^"']+)["'][^>]*>/gi)]
+      .map(m => new URL(m[1], url).toString()).slice(0, 25);
+    const inline = [...html.matchAll(/<script\b(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
+    const button = (html.match(/<input[^>]*id=["']fPP:searchProcessos["'][^>]*>/i) || [])[0] || '';
+    const oabFields = [...html.matchAll(/<input\b[^>]*>/gi)].map(m => m[0]).filter(x => /numeroOAB|j_id240/i.test(x));
+    snippets.push(label + ': HTTP ' + res.status + '; ' + Buffer.byteLength(html) + ' bytes; ' + scripts.length + ' scripts');
+    if (button) snippets.push('BOTÃO PJe: ' + button.slice(0, 900));
+    if (oabFields.length) snippets.push('CAMPOS OAB: ' + oabFields.join(' | ').slice(0, 1200));
+    for (const block of inline) {
+      for (const term of terms) {
+        const i = block.toLowerCase().indexOf(term.toLowerCase());
+        if (i >= 0) snippets.push('INLINE ' + term + ': ' + block.slice(Math.max(0, i - 300), i + 1000));
+      }
+    }
+    const selected = scripts.filter(u => /pje|global|recaptcha|menu|a4j|richfaces|chunk/i.test(u));
+    const found = await Promise.all(selected.map(async u => {
+      try {
+        const r = await fetch(u, { headers, timeout: 12000 });
+        const js = await r.text();
+        const hits = [];
+        for (const term of terms) {
+          let from = 0, count = 0, i;
+          while ((i = js.toLowerCase().indexOf(term.toLowerCase(), from)) >= 0 && count < 2) {
+            hits.push(term + ': ' + js.slice(Math.max(0, i - 300), i + 1000));
+            from = i + term.length;
+            count++;
+          }
+        }
+        return hits.length ? u + '\n' + hits.join('\n---\n') : '';
+      } catch (e) { return u + ': ' + e.message; }
+    }));
+    snippets.push(...found.filter(Boolean).slice(0, 12));
+    snippets.push('SCRIPTS ' + label + ': ' + scripts.join('\n'));
+  }
+  try {
+    await inspectPage(
+      'https://pje-consulta-publica.tjmg.jus.br/pje/ConsultaPublica/listView.seam',
+      ['executarPesquisa', 'executarReCaptcha', 'searchProcessos', 'numeroOAB', 'AJAXREQUEST'],
+      'PJe 1º grau'
+    );
+  } catch (e) { snippets.push('ERRO PJe: ' + e.message); }
+  try {
+    await inspectPage(
+      'https://consulta.tjmg.jus.br/pesquisa',
+      ['oabRepresentante', 'numeroOab', 'numeroOAB', 'ufOab', 'OAB do Representante', 'api/', 'axios'],
+      'Pesquisa unificada'
+    );
+  } catch (e) { snippets.push('ERRO pesquisa unificada: ' + e.message); }
+  const output = snippets.join('\n\n').slice(0, 3600);
+  await enviarMensagem(token, chatId, '🔎 DIAGNÓSTICO TJMG\n\n' + output);
+}
+
 // ─── Handler — Netlify Background Function ────────────────────────────────────
 // O Netlify responde 202 automaticamente ao Telegram e executa este handler
 // sem limite de 10s — até 15 minutos disponíveis.
@@ -525,7 +588,10 @@ exports.handler = async (event) => {
     if (updateId) processados.add(updateId);
     if (processados.size > 500) processados.clear();
 
-    if (/^\/oab\s+/i.test(texto)) {
+    if (/^\/diagmg$/i.test(texto)) {
+      await diagnosticarTJMG(token, chatId);
+
+    } else if (/^\/oab\s+/i.test(texto)) {
       const arg   = texto.replace(/^\/oab\s+/i, '').trim();
       const match = arg.match(/^([A-Za-z]{2})\s*(\d+)$/);
       if (!match) {
