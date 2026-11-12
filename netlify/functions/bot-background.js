@@ -502,75 +502,42 @@ async function processarOAB(token, chatId, estado, numero) {
 const processados = new Set();
 
 async function diagnosticarTJMG(token, chatId) {
-  await enviarMensagem(token, chatId, '🛠 Diagnóstico PJe: iniciando GET...');
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'pt-BR,pt;q=0.9',
-    'Connection': 'close'
-  };
-  function attr(tag, name) {
-    const re = new RegExp("\\b" + name + "=[\"']([^\"']*)[\"']", "i");
-    return (tag.match(re) || [])[1] || '';
-  }
-  let result = {};
+  await enviarMensagem(token, chatId, '🛠 Testando API oficial de pesquisa do TJMG por OAB...');
+  let result;
   try {
-    const pageUrl = 'https://pje-consulta-publica.tjmg.jus.br/pje/ConsultaPublica/listView.seam';
-    const get = await fetch(pageUrl, { headers, signal: AbortSignal.timeout(4000) });
-    const html = await get.text();
-    const setCookies = get.headers.getSetCookie ? get.headers.getSetCookie() : [get.headers.get('set-cookie') || ''];
-    const cookies = setCookies.filter(Boolean).map(x => x.split(';')[0]).join('; ');
-    const form = (html.match(/<form[^>]*id=["']fPP["'][\s\S]*?<\/form>/i) || [])[0] || '';
-    if (!form) throw new Error('fPP ausente no GET HTTP ' + get.status + ' bytes ' + Buffer.byteLength(html));
-    const params = new URLSearchParams();
-    for (const m of form.matchAll(/<input\b[^>]*>/gi)) {
-      const tag = m[0], name = attr(tag, 'name'), type = (attr(tag, 'type') || 'text').toLowerCase();
-      if (!name || ['button','reset','file','image'].includes(type)) continue;
-      if (['checkbox','radio'].includes(type) && !/\bchecked(?:=["'][^"']*["'])?/i.test(tag)) continue;
-      params.set(name, attr(tag, 'value'));
-    }
-    for (const m of form.matchAll(/<select\b[^>]*>[\s\S]*?<\/select>/gi)) {
-      const tag = m[0], name = attr(tag, 'name');
-      if (!name) continue;
-      const options = [...tag.matchAll(/<option\b[^>]*>/gi)].map(x => x[0]);
-      const chosen = options.find(x => /\bselected(?:=["'][^"']*["'])?/i.test(x)) || options[0];
-      params.set(name, attr(chosen || '', 'value'));
-    }
-    params.set('fPP:Decoration:numeroOAB', '171934');
-    params.set('fPP:Decoration:j_id240', 'N');
-    params.set('fPP:Decoration:estadoComboOAB', '12');
-    params.set('AJAX:EVENTS_COUNT', '1');
-    params.set('AJAXREQUEST', 'fPP');
-    params.set('fPP:j_id261', 'fPP:j_id261');
-    const formTag = (form.match(/<form[^>]*>/i) || [''])[0];
-    const action = new URL(attr(formTag, 'action') || pageUrl, get.url).toString();
-    await enviarMensagem(token, chatId, '🛠 Diagnóstico PJe: GET OK (' + get.status + '), formulário e sessão carregados; enviando POST...');
-    const post = await fetch(action, {
+    const url = 'https://api1.tjmg.jus.br/cpu/processos?page=0&size=10';
+    const payload = {
+      filter: { representanteMatricula: ['MG171934'] },
+      filterNot: {}
+    };
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
-        ...headers,
-        Cookie: cookies,
-        Referer: get.url,
-        Origin: new URL(get.url).origin,
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Faces-Request': 'partial/ajax',
-        'X-Requested-With': 'XMLHttpRequest',
-        Accept: 'application/xml, text/xml, */*; q=0.01'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Origin': 'https://consulta.tjmg.jus.br',
+        'Referer': 'https://consulta.tjmg.jus.br/pesquisa',
+        'Connection': 'close'
       },
-      body: params.toString(),
-      signal: AbortSignal.timeout(4000)
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(8000)
     });
-    const body = await post.text();
-    const updates = [...body.matchAll(/<update[^>]*id=["']([^"']+)["'][^>]*>([\s\S]*?)<\/update>/gi)].map(m => ({ id: m[1], content: m[2].replace(/<!\[CDATA\[|\]\]>/g, '').slice(0, 700) }));
-    const cnjs = [...new Set(body.match(/\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}/g) || [])];
-    const title = (body.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '';
-    const inner = (body.match(/<body[^>]*>([\s\S]*?)<\/body>/i) || [])[1] || body;
-    const bodyText = inner.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim();
-    result = { getStatus: get.status, postStatus: post.status, getBytes: Buffer.byteLength(html), postBytes: Buffer.byteLength(body), action, cookieNames: cookies.split(';').map(x => x.split('=')[0]), fieldNames: [...params.keys()], title, cnjs, updateIds: updates.map(x => x.id), updates: updates.slice(0, 2), bodyText: bodyText.slice(0, 1100), responseStart: body.slice(0, 250) };
+    const body = await response.text();
+    let data;
+    try { data = JSON.parse(body); } catch { data = body; }
+    result = {
+      url,
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+      responseBytes: Buffer.byteLength(body),
+      payload,
+      data: typeof data === 'string' ? data.slice(0, 2600) : data
+    };
   } catch (e) {
     result = { error: e.message, name: e.name, stack: String(e.stack || '').slice(0, 700) };
   }
-  await enviarMensagem(token, chatId, '🔎 RESULTADO PJe TJMG\n' + JSON.stringify(result).slice(0, 3300));
+  await enviarMensagem(token, chatId, '🔎 RESULTADO API TJMG\n' + JSON.stringify(result).slice(0, 3500));
 }
 
 // ─── Handler — Netlify Background Function ────────────────────────────────────
