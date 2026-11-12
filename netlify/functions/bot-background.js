@@ -416,64 +416,91 @@ ${cards}
 async function processarOAB(token, chatId, estado, numero) {
   await enviarMensagem(token, chatId, `🔍 Buscando OAB *${estado} ${numero}*...`);
 
+  // Portais diretos são complementares. O resultado nacional do DJEN é
+  // consultado em seguida para que uma OAB de qualquer UF possa aparecer
+  // em publicações de tribunais de todo o país.
+  let processosDiretos = [];
   const siglasDiretas = { SP: 'TJSP', MS: 'TJMS' };
   const siglaDireta = siglasDiretas[estado.toUpperCase()];
+
   if (siglaDireta) {
     try {
       await enviarMensagem(token, chatId, `🔍 Consultando ${siglaDireta} diretamente...`);
-      const processosDiretos = estado.toUpperCase() === 'MG'
-        ? await buscarOABnoTJMG(numero)
-        : await buscarOABnoESAJ(estado, numero, 30);
-
-      if (processosDiretos.length > 0) {
-        await enviarMensagem(token, chatId, `✅ *${processosDiretos.length} processos encontrados no ${siglaDireta}*\n📁 Gerando arquivo HTML...`);
-        const nomeArq  = `OAB_${estado}${numero}_processos.html`;
-        const conteudo = gerarHTML(estado, numero, processosDiretos, null);
-        const kb       = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
-        await enviarArquivo(token, chatId, nomeArq, conteudo,
-          `🌐 ${nomeArq}\n${kb} KB — abra no navegador\nOAB: ${estado}${numero} | 📊 ${processosDiretos.length} processos (${siglaDireta})`
-        );
-        return;
-      }
-      await enviarMensagem(token, chatId, `ℹ️ Nenhum processo encontrado no ${siglaDireta}. Consultando a fonte alternativa...`);
+      processosDiretos = await buscarOABnoESAJ(estado, numero, 30);
     } catch (e) {
       console.warn(`[${siglaDireta} direto]`, e.message);
-      await enviarMensagem(token, chatId, `ℹ️ ${siglaDireta} indisponível. Consultando a fonte alternativa...`);
+      await enviarMensagem(token, chatId, `ℹ️ ${siglaDireta} direto indisponível. Vou continuar pela consulta nacional...`);
     }
   }
 
-  // ── Fallback nacional: API pública do DJEN/CNJ, que permite filtro por OAB ──
+  let processosNacionais = [];
+  let avisoDjen = '';
+  let periodoDjen = null;
+
   try {
     const { buscarPublicacoesOAB } = require('../tribunais/djen');
     const busca = await buscarPublicacoesOAB(estado, numero, 90);
-    const processos = busca.processos;
-    const total = processos.length;
+    processosNacionais = busca.processos || [];
+    periodoDjen = { inicio: busca.dataInicio, fim: busca.dataFim };
 
-    if (total === 0) {
-      await enviarMensagem(token, chatId,
-        `📋 Nenhuma publicação localizada para OAB *${estado} ${numero}* no DJEN entre ${busca.dataInicio} e ${busca.dataFim}. Isso não significa que não existam outros processos sem publicação nesse período.\\n\\n_Fonte: DJEN/CNJ_`
-      );
+    const temTJSP = processosNacionais.some(p => String(p.tribunal || '').toUpperCase().includes('TJSP'));
+    if (temTJSP) {
+      await enviarMensagem(token, chatId, '🔍 Complementando os dados públicos do TJSP...');
+      processosNacionais = await enriquecerListaTJSP(processosNacionais);
+    }
+  } catch (e) {
+    console.error('DJEN nacional:', e.message);
+    avisoDjen = e.message;
+  }
+
+  // Une os dados diretos (mais ricos quando disponíveis) às publicações
+  // nacionais, sem descartar tribunais diferentes nem duplicar processos.
+  const unificados = new Map();
+  for (const p of processosNacionais) {
+    const chave = String(p.numero || p.numeroProcesso || '').replace(/\\D/g, '');
+    if (chave) unificados.set(chave, p);
+  }
+  for (const p of processosDiretos) {
+    const chave = String(p.numero || p.numeroProcesso || '').replace(/\\D/g, '');
+    if (!chave) continue;
+    const anterior = unificados.get(chave) || {};
+    unificados.set(chave, { ...anterior, ...p });
+  }
+  const processosFinais = Array.from(unificados.values());
+
+  if (processosFinais.length === 0) {
+    if (avisoDjen) {
+      await enviarMensagem(token, chatId, `❌ Não foi possível consultar o DJEN/CNJ: ${avisoDjen}`);
       return;
     }
-
-    const temTJSP = processos.some(p => String(p.tribunal || '').toUpperCase().includes('TJSP'));
-    let processosFinais = processos;
-    if (temTJSP) {
-      await enviarMensagem(token, chatId, `✅ *${total} processo(s) localizado(s) em publicações do DJEN/CNJ*\\n🔍 Complementando dados públicos do TJSP...`);
-      processosFinais = await enriquecerListaTJSP(processos);
-    } else {
-      await enviarMensagem(token, chatId, `✅ *${total} processo(s) localizado(s) em publicações do DJEN/CNJ*\\n📁 Gerando arquivo HTML...`);
-    }
-
-    const nomeArq = `OAB_${estado}${numero}_processos.html`;
-    const conteudo = gerarHTML(estado, numero, processosFinais, null);
-    const kb = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
-    await enviarArquivo(token, chatId, nomeArq, conteudo,
-      `🌐 ${nomeArq}\\n${kb} KB — abra no navegador\\nOAB: ${estado}${numero} | 📊 ${total} processo(s)\\nFonte: DJEN/CNJ (últimos 90 dias)`
+    const periodo = periodoDjen
+      ? ` entre ${periodoDjen.inicio} e ${periodoDjen.fim}`
+      : ' nos últimos 90 dias';
+    await enviarMensagem(token, chatId,
+      `📋 Nenhuma publicação localizada para OAB *${estado} ${numero}*${periodo}. Isso não significa que não existam processos sem publicação nesse período.\\n\\n_Fonte: DJEN/CNJ e portais públicos consultados._`
     );
-  } catch (e) {
-    console.error('processarOAB error:', e);
-    await enviarMensagem(token, chatId, `❌ Não foi possível concluir a consulta à API do DJEN/CNJ: ${e.message}`);
+    return;
+  }
+
+  await enviarMensagem(token, chatId,
+    `✅ *${processosFinais.length} processo(s) localizado(s)*\\n📁 Gerando relatório HTML nacional...`
+  );
+
+  const nomeArq = `OAB_${estado}${numero}_processos.html`;
+  const conteudo = gerarHTML(estado, numero, processosFinais, null);
+  const kb = (Buffer.byteLength(conteudo, 'utf8') / 1024).toFixed(1);
+  const fontes = [...new Set(processosFinais.map(p => p.tribunal).filter(Boolean))].join(', ');
+  const legenda = `🌐 ${nomeArq}\\n${kb} KB — abra no navegador\\nOAB: ${estado} ${numero} | 📊 ${processosFinais.length} processo(s)\\nTribunais: ${fontes || 'fontes públicas'}`;
+  await enviarArquivo(token, chatId, nomeArq, conteudo, legenda);
+
+  if (avisoDjen) {
+    await enviarMensagem(token, chatId,
+      `⚠️ O relatório contém os resultados dos portais diretos, mas a consulta nacional DJEN falhou: ${avisoDjen}`
+    );
+  } else if (periodoDjen) {
+    await enviarMensagem(token, chatId,
+      `ℹ️ Consulta nacional DJEN/CNJ realizada para o período de ${periodoDjen.inicio} a ${periodoDjen.fim}. O relatório reúne publicações localizadas e resultados dos portais diretos disponíveis.`
+    );
   }
 }
 
